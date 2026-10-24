@@ -419,6 +419,14 @@ export async function settleDeliverySettings(
   return deliver(current);
 }
 
+export async function waitForSubmittedRoute(host: ChatHost, sessionKey: string): Promise<boolean> {
+  const pending = getPendingChatPickerPatch(host, sessionKey);
+  if (pending && !(await waitForPendingChatSettings(host, sessionKey, pending))) {
+    return false;
+  }
+  return host.sessionKey === sessionKey;
+}
+
 export async function waitForPendingChatSettings(
   host: ChatHost,
   sessionKey: string,

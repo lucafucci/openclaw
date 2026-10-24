@@ -1,4 +1,3 @@
-/* oxlint-disable max-lines -- Keep foreground ownership and recovery handoff in the existing submission owner. */
 import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/commands-registry.shared.js";
 import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import {
@@ -49,7 +48,7 @@ import { sendDetachedCommandMessage } from "./chat-send-detached-command.ts";
 import {
   canSendVolatileQueueItem,
   reconnectSafeQueuedSendState,
-  waitForPendingChatSettings,
+  waitForSubmittedRoute,
 } from "./chat-send-queue-state.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
@@ -86,14 +85,6 @@ import { scheduleChatScroll } from "./scroll.ts";
 
 registerChatGoalsEnglish();
 registerMcpEnglish();
-
-async function waitForSubmittedRoute(host: ChatHost, sessionKey: string): Promise<boolean> {
-  const pending = getPendingChatPickerPatch(host, sessionKey);
-  if (pending && !(await waitForPendingChatSettings(host, sessionKey, pending))) {
-    return false;
-  }
-  return host.sessionKey === sessionKey;
-}
 
 export async function handleSendChat(
   host: ChatHost,
@@ -141,9 +132,10 @@ export async function handleSendChat(
   const attachmentsToSend = snapshotChatAttachments(
     messageOverride == null ? host.chatAttachments : (opts?.attachmentsOverride ?? []),
   );
+  const submittedScope = resolveUiConversationIdentity(host, submittedSessionKey);
   const submitGuardOptions = {
     attachments: messageOverride == null ? attachmentsToSend : [],
-    scope: resolveUiConversationIdentity(host, submittedSessionKey),
+    scope: submittedScope,
     isCurrent: () =>
       submittedOwnerIsCurrent() &&
       submittedConnectionIsCurrent() &&
@@ -152,11 +144,7 @@ export async function handleSendChat(
   const isFreshSubmission = () =>
     submittedWhileConnected &&
     submitGuardOptions.isCurrent() &&
-    visibleSessionMatches(
-      host,
-      submitGuardOptions.scope.sessionKey,
-      submitGuardOptions.scope.agentId,
-    );
+    visibleSessionMatches(host, submittedScope.sessionKey, submittedScope.agentId);
   const clearComposer = (retainAttachments: "none" | "annotations" | "all" = "none") =>
     messageOverride == null
       ? clearSubmittedComposerState(
