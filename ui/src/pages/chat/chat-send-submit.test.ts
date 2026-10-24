@@ -35,6 +35,110 @@ const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
 useChatSendBrowserFixture();
 
+describe("fresh input after reconnect", () => {
+  it.each(["List my automations", "/approve approval-1 allow-once"])(
+    "sends current %s without consuming the recovery marker",
+    async (message) => {
+      const host = makeChatHost({
+        chatMessage: message,
+        chatRunId: message.startsWith("/approve") ? "active-run" : null,
+        currentSessionId: "reconnected-session",
+        reconnectResumeSessionId: "reconnected-session",
+        requestHandlers: { "chat.send": { status: "started" } },
+      });
+
+      await handleSendChat(host);
+
+      expect(findChatSendPayload(host)).toMatchObject({ sessionId: "reconnected-session" });
+      expect(findChatSendPayload(host)).not.toHaveProperty("__controlUiReconnectResume");
+      expect(host.reconnectResumeSessionId).toBe("reconnected-session");
+    },
+  );
+
+  it("does not retain fresh authority across a connection change during preparation", async () => {
+    const settings = createDeferred<boolean>();
+    const host = makeChatHost({
+      chatMessage: "Wait for settings",
+      currentSessionId: "reconnected-session",
+      reconnectResumeSessionId: "reconnected-session",
+      pendingSettingsPatches: { "agent:main": settings.promise },
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionId: "reconnected-session",
+          sessionInfo: { key: "agent:main", hasActiveRun: false, status: "done" },
+        },
+        "chat.send": { status: "started" },
+      },
+    });
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
+    settings.resolve(true);
+    await send;
+    delete host.pendingSettingsPatches?.["agent:main"];
+    await resumeStoredChatOutboxes(host);
+
+    expect(findChatSendPayload(host)).toMatchObject({ __controlUiReconnectResume: true });
+  });
+
+  it("keeps a restored offline submission marked as recovery", async () => {
+    const source = makeChatHost({
+      connected: false,
+      chatMessage: "Previously queued input",
+      currentSessionId: "reconnected-session",
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionId: "reconnected-session",
+          sessionInfo: { key: "agent:main", hasActiveRun: false, status: "done" },
+        },
+        "chat.send": { status: "started" },
+      },
+    });
+    await handleSendChat(source);
+    expect(listStoredChatOutboxes(source)[0]?.queue).toHaveLength(1);
+    reloadChatDocumentStorage([]);
+    const restored = makeChatHost({
+      client: source.client,
+      currentSessionId: "reconnected-session",
+      reconnectResumeSessionId: "reconnected-session",
+    });
+
+    await resumeStoredChatOutboxes(restored);
+
+    expect(findChatSendPayload(source)).toMatchObject({
+      sessionId: "reconnected-session",
+      __controlUiReconnectResume: true,
+    });
+  });
+
+  it("does not treat an explicit retry of failed input as a fresh submission", async () => {
+    const host = makeChatHost({
+      chatMessage: "Retry this input",
+      currentSessionId: "reconnected-session",
+      requestHandlers: {
+        "chat.send": { status: "error" },
+        "chat.history": {
+          messages: [],
+          sessionId: "reconnected-session",
+          sessionInfo: { key: "agent:main", hasActiveRun: false, status: "done" },
+        },
+      },
+    });
+    await handleSendChat(host);
+    const failed = expectDefined(host.chatQueue[0], "failed input");
+    expect(failed.sendState).toBe("failed");
+    host.reconnectResumeSessionId = "reconnected-session";
+
+    await retryQueuedChatMessage(host, failed.id);
+
+    const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(sends).toHaveLength(2);
+    expect(sends[1]?.[1]).toMatchObject({ __controlUiReconnectResume: true });
+  });
+});
+
 describe("attachment frame admission", () => {
   const frameLimitedHello = (maxPayload: number) => ({
     ...sessionMutationGatewayHello(),

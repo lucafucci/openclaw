@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- Keep foreground ownership and recovery handoff in the existing submission owner. */
 import { shouldForwardModelCommandToServer } from "../../../../src/auto-reply/commands-registry.shared.js";
 import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import {
@@ -133,6 +134,7 @@ export async function handleSendChat(
   const submittedAtMs = performance.now();
   const submittedSessionKey = host.sessionKey;
   const submittedSessionId = host.currentSessionId;
+  const submittedWhileConnected = Boolean(host.connected && host.client);
   const submittedConnectionIsCurrent = captureChatConnectionOwner(host, false);
   const submittedOwnerIsCurrent = captureOutboxPayloadOwner(host);
   let expectedLeafEntryId = resolveDisplayedLeafEntryId(host);
@@ -147,6 +149,14 @@ export async function handleSendChat(
       submittedConnectionIsCurrent() &&
       host.sessionKey === submittedSessionKey,
   };
+  const isFreshSubmission = () =>
+    submittedWhileConnected &&
+    submitGuardOptions.isCurrent() &&
+    visibleSessionMatches(
+      host,
+      submitGuardOptions.scope.sessionKey,
+      submitGuardOptions.scope.agentId,
+    );
   const clearComposer = (retainAttachments: "none" | "annotations" | "all" = "none") =>
     messageOverride == null
       ? clearSubmittedComposerState(
@@ -366,6 +376,7 @@ export async function handleSendChat(
         const recoveryScope = resolveUiConversationIdentity(host, submittedSessionKey);
         scheduleChatScroll(host, true, false, { source: "manual" });
         await sendDetachedCommandMessage(host, message, {
+          isFreshSubmission,
           attachments: deliveredAttachments.length ? deliveredAttachments : undefined,
           recovery: captureChatCommandComposerRecovery(host, recoveryScope, cleared),
         });
@@ -414,7 +425,10 @@ export async function handleSendChat(
           }
           // Submission resumes follow; delayed command results respect later reader input.
           scheduleChatScroll(host, true, false, { source: "manual" });
-          await deliverChatQueueItem(host, queued, { routingSessionKey: host.sessionKey });
+          await deliverChatQueueItem(host, queued, {
+            routingSessionKey: host.sessionKey,
+            isFreshSubmission,
+          });
         });
         return undefined;
       }
@@ -711,6 +725,7 @@ export async function handleSendChat(
       },
       (deliveryItem) =>
         deliverChatQueueItem(host, deliveryItem, {
+          isFreshSubmission,
           ...cleared,
           previousGoalDraftMode,
           ...(allowActiveRunSend ? { allowActiveRunSend: true } : {}),

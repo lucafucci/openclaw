@@ -35,6 +35,7 @@ export async function requestChatSend(
     sessionId?: string;
     replyToId?: string;
     expectedLeafEntryId?: string | null;
+    isFreshSubmission?: boolean;
   },
 ): Promise<ChatSendAck> {
   if (params.attachments?.length) {
@@ -62,7 +63,10 @@ export async function requestChatSend(
   }
   const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
   const controlUiReconnectResume = Boolean(
-    !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
+    !params.intent &&
+    !params.isFreshSubmission &&
+    sessionId &&
+    state.reconnectResumeSessionId === sessionId,
   );
   const attachments = buildChatApiAttachments(params.attachments);
   const hasAudio = attachments?.some((attachment) =>
