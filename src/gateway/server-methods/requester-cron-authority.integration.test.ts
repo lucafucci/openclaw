@@ -77,7 +77,7 @@ installRequesterCronAuthorityTestHooks();
 async function withSuccessor<T>(
   admin: boolean | "channel-owner" | "android-admin" | "android-write",
   run: RequesterRun<T>,
-  isCurrent?: () => boolean,
+  caller?: ReturnType<typeof captureGatewayDeviceRevocation>,
 ) {
   const hasManagement = Boolean(admin) && admin !== "android-write";
   const originalRunId = "original-requester";
@@ -120,13 +120,15 @@ async function withSuccessor<T>(
               }),
           },
         }
-      : admission(originalRunId, requester, undefined, isCurrent);
+      : admission(originalRunId, requester, undefined, caller?.isCurrent);
   if (admin === "channel-owner") {
     setRuntimeConfigSnapshot({ ...cfg, commands: { ownerAllowFrom: ["discord:owner-1"] } });
   }
   await inRun(originalRunId, admitted, () =>
     markRequesterTurnYieldedWithAuthority({ ...requesterTurn, runs, transfer }),
   );
+  // Only the continuation's retained source may keep device authority alive.
+  caller?.release();
   await settleRequesterTurnAfterSessionSpawns({
     ...requesterTurn,
     requesterYielded: true,
@@ -409,7 +411,8 @@ describe("requester continuation persisted automation management", () => {
             );
           }
           release.resolve();
-          const rejection = source === "recovery" ? /authority|admitted run/i : /Automation admin grant/;
+          const rejection =
+            source === "recovery" ? /authority|admitted run/i : /Automation admin grant/;
           await expect(pending).rejects.toThrow(rejection);
           expect(responses).toHaveBeenCalledExactlyOnceWith(
             false,
@@ -430,7 +433,7 @@ describe("requester continuation persisted automation management", () => {
         if (source === "recovery") {
           await inRun("recovery-inspection", undefined, exercise);
         } else {
-          await withSuccessor("android-admin", exercise, caller.isCurrent);
+          await withSuccessor("android-admin", exercise, caller);
         }
       } finally {
         caller.release();
@@ -542,9 +545,16 @@ describe("requester continuation persisted automation management", () => {
     ["channel-owner", "cron.remove"],
   ] as const)("requires admitted manager %s and matching grant %s", async (admin, grantMethod) => {
     const fixture = await createStoredJob();
-    const [ok, result, error] = await withSuccessor(admin, (identity) =>
-      fixture.updateWithGrantFor(grantMethod, identity),
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "android-requester-device", role: "operator" },
+      () => true,
     );
+    const [ok, result, error] = await withSuccessor(
+      admin,
+      (identity) => fixture.updateWithGrantFor(grantMethod, identity),
+      caller,
+    ).finally(caller.release);
     const permitted = Boolean(admin) && admin !== "android-write" && grantMethod === "cron.update";
     expect(ok).toBe(permitted);
     if (permitted) {
@@ -596,7 +606,7 @@ describe("requester continuation persisted automation management", () => {
           ? "android-admin"
           : true,
       fixture.update,
-      caller.isCurrent,
+      caller,
     );
     try {
       await awaitGateBeforeSettlement(
