@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -35,6 +36,7 @@ import {
 } from "../../../helpers/openai-responses-model-fixture.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../helpers/tls-fixture.js";
 import { isolatedGatewayEnv, writeFixtureReply } from "./gateway-recovery.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -65,6 +67,11 @@ it(
     await Promise.all(
       [stateDir, workspace, emptyPlugins].map((dir) => fs.mkdir(dir, { recursive: true })),
     );
+    const certPath = path.join(root, "cert.pem");
+    const keyPath = path.join(root, "key.pem");
+    await fs.writeFile(certPath, TEST_TLS_CERT_PEM);
+    await fs.writeFile(keyPath, TEST_TLS_KEY_PEM);
+    const tlsFingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
     const token = "synthetic-android-proof-gateway-token";
     const envPatch = {
       ...isolatedGatewayEnv,
@@ -139,11 +146,17 @@ it(
         entries: { main: {} },
       };
       config.tools = { allow: ["automations"], codeMode: false, toolSearch: false };
-      config.gateway = { auth: { mode: "token", token }, trustedProxies: ["127.0.0.1"] };
+      config.gateway = {
+        auth: { mode: "token", token },
+        trustedProxies: ["127.0.0.1"],
+        tls: { enabled: true, autoGenerate: false, certPath, keyPath },
+      };
       gateway = await startGatewayWithClient({
         cfg: config,
         configPath: path.join(stateDir, "openclaw.json"),
         token,
+        secure: true,
+        tlsFingerprint,
         scopes: ["operator.admin"],
       });
       withFastReplyConfig(expectDefined(getRuntimeConfigSnapshot(), "runtime config"));
@@ -175,8 +188,9 @@ it(
         );
         await admin.request("device.pair.approve", { requestId: pairing.request.requestId });
         const client = await connectGatewayClient({
-          url: `ws://127.0.0.1:${gateway!.port}`,
+          url: `wss://127.0.0.1:${gateway!.port}`,
           token,
+          tlsFingerprint,
           clientName: "openclaw-android",
           mode: "ui",
           platform: "android",
