@@ -33,7 +33,7 @@ import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
 } from "../../../helpers/openai-responses-model-fixture.js";
-import { createDeferred } from "../../../helpers/promise.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { isolatedGatewayEnv, writeFixtureReply } from "./gateway-recovery.test-support.js";
 
@@ -57,7 +57,7 @@ type ProviderInput = { type?: string; output?: string };
 it(
   "allows Android admin chat management and rejects narrowed or revoked device authority",
   { timeout: 120_000 },
-  async () => {
+  async ({ signal }) => {
     const root = tempDirs.make("openclaw-android-automation-proof-");
     const stateDir = path.join(root, "state");
     const workspace = path.join(root, "workspace");
@@ -138,7 +138,7 @@ it(
         defaults: { ...config.agents?.defaults, workspace },
         entries: { main: {} },
       };
-      config.tools = { allow: ["automations"] };
+      config.tools = { allow: ["automations"], codeMode: false, toolSearch: false };
       config.gateway = { auth: { mode: "token", token }, trustedProxies: ["127.0.0.1"] };
       gateway = await startGatewayWithClient({
         cfg: config,
@@ -159,7 +159,7 @@ it(
       });
       const connectAndroid = async (name: string, scopes: string[]) => {
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(stateDir, name, "credentials.sqlite"),
+          path: path.join(stateDir, name, "client", "credentials.sqlite"),
         });
         const pairing = await requestDevicePairing(
           {
@@ -234,7 +234,7 @@ it(
         message: "Update the existing automation",
         idempotencyKey: "proof-revoked",
       });
-      await modelEntered.promise;
+      await withinTest(modelEntered.promise, signal);
       await admin.request("device.token.revoke", {
         deviceId: manager.identity.deviceId,
         role: "operator",

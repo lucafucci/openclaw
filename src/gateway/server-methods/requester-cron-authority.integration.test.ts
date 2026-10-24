@@ -293,7 +293,7 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
-  it.each(["recovery", "Android requester"] as const)(
+  it.for(["recovery", "Android requester"] as const)(
     "keeps %s reads scoped and withholds a record when authority closes during its read",
     async (source, { signal }) => {
       const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
