@@ -13,10 +13,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - lane: browser
-            revision: 16dc493f860d18169e0ff4e1a817b447cd3c2e46
-          - lane: android-red
-            revision: 57244b9d44c0c8641c715379ee28415863212c3d
+          - lane: android-green
+            revision: 78383f282c9485747d679fcae3a52fce5af17db2
     env:
       OPENCLAW_VITEST_RUNTIME: node
       OPENCLAW_VITEST_MAX_WORKERS: "1"
@@ -52,13 +50,13 @@ jobs:
           pnpm check:max-lines-ratchet --base e1e498602cec224ef4adb16f13512ca6aea26d98 2>&1 | tee "$PROOF_OUTPUT"/ratchet.log
           pnpm exec oxfmt --check ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-queue-state.ts ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts test/vitest/vitest.ui-e2e.config.ts test/vitest/vitest.ui-paths.mjs
           pnpm --dir ui test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts src/pages/chat/chat-send.test.ts src/pages/chat/chat-outbox-transient-recovery.test.ts 2>&1 | tee "$PROOF_OUTPUT"/browser-focused.log
-      - name: Android continuation regressions before repair
-        if: matrix.lane == 'android-red'
+      - name: Android continuation regressions after repair
+        if: matrix.lane == 'android-green'
         run: |
           set -o pipefail
-          node scripts/run-vitest.mjs run src/gateway/server-methods/requester-cron-authority.integration.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/android-continuation.log
+          node scripts/run-vitest.mjs run src/gateway/server-methods/requester-cron-authority.integration.test.ts src/agents/cron-creator-authority-context.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/android-continuation.log
       - name: Android authenticated protocol proof
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'android-red' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'android-green' }}
         run: |
           set -o pipefail
           node scripts/run-vitest.mjs run test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/android-protocol.log
