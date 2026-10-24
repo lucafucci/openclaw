@@ -412,7 +412,9 @@ describe("requester continuation persisted automation management", () => {
           }
           release.resolve();
           const rejection =
-            source === "recovery" ? /authority|admitted run/i : /Automation admin grant/;
+            source === "recovery"
+              ? /authority|admitted run/i
+              : /Automation caller authority is no longer active/;
           await expect(pending).rejects.toThrow(rejection);
           expect(responses).toHaveBeenCalledExactlyOnceWith(
             false,
