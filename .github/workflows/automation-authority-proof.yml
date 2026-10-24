@@ -22,12 +22,13 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "1"
       NODE_OPTIONS: --max-old-space-size=6144
       OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ matrix.revision }}
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: 3
       - name: Setup pinned toolchain and dependencies
         id: setup
         uses: ./.github/actions/setup-node-env
@@ -38,43 +39,45 @@ jobs:
           cache-mode: off
       - name: Pin evidence
         run: |
-          mkdir -p proof-output
-          git rev-parse HEAD | tee proof-output/revision.txt
+          PROOF_OUTPUT="$RUNNER_TEMP/authority-proof"
+          echo "PROOF_OUTPUT=$PROOF_OUTPUT" >> "$GITHUB_ENV"
+          mkdir -p "$PROOF_OUTPUT"
+          git rev-parse HEAD | tee "$PROOF_OUTPUT"/revision.txt
           node --version
           pnpm --version
       - name: Browser ratchet and focused regressions
         if: matrix.lane == 'browser'
         run: |
           set -o pipefail
-          pnpm check:max-lines-ratchet --base e1e498602cec224ef4adb16f13512ca6aea26d98 2>&1 | tee proof-output/ratchet.log
+          pnpm check:max-lines-ratchet --base e1e498602cec224ef4adb16f13512ca6aea26d98 2>&1 | tee "$PROOF_OUTPUT"/ratchet.log
           pnpm exec oxfmt --check ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-queue-state.ts ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts test/vitest/vitest.ui-e2e.config.ts test/vitest/vitest.ui-paths.mjs
-          pnpm --dir ui test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts src/pages/chat/chat-send.test.ts src/pages/chat/chat-outbox-transient-recovery.test.ts 2>&1 | tee proof-output/browser-focused.log
+          pnpm --dir ui test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts src/pages/chat/chat-send.test.ts src/pages/chat/chat-outbox-transient-recovery.test.ts 2>&1 | tee "$PROOF_OUTPUT"/browser-focused.log
       - name: Android continuation regressions before repair
         if: matrix.lane == 'android-red'
         run: |
           set -o pipefail
-          node scripts/run-vitest.mjs run src/gateway/server-methods/requester-cron-authority.integration.test.ts --maxWorkers=1 2>&1 | tee proof-output/android-continuation.log
+          node scripts/run-vitest.mjs run src/gateway/server-methods/requester-cron-authority.integration.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/android-continuation.log
       - name: Android authenticated protocol proof
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'android-red' }}
         run: |
           set -o pipefail
-          node scripts/run-vitest.mjs run test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts --maxWorkers=1 2>&1 | tee proof-output/android-protocol.log
+          node scripts/run-vitest.mjs run test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/android-protocol.log
       - name: Build reviewed browser candidate runtime
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'browser' }}
         id: build
         run: |
           set -o pipefail
-          pnpm build:runtime 2>&1 | tee proof-output/browser-build.log
+          pnpm build:runtime 2>&1 | tee "$PROOF_OUTPUT"/browser-build.log
           node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
       - name: Browser reconnect and automation inventory proof
         if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.lane == 'browser' }}
         run: |
           set -o pipefail
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts --maxWorkers=1 2>&1 | tee proof-output/browser-runtime.log
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/browser-runtime.log
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: authority-${{ matrix.lane }}-${{ matrix.revision }}
-          path: proof-output
+          path: ${{ runner.temp }}/authority-proof
           retention-days: 7
