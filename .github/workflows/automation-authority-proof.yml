@@ -14,7 +14,9 @@ jobs:
       matrix:
         include:
           - lane: android-green
-            revision: 78383f282c9485747d679fcae3a52fce5af17db2
+            revision: b7e2173a3e4298d665d9163d0cb8be62341cbbe1
+          - lane: android-red
+            revision: 4c65e292c6c685d0a6eeb26927656d908b61c297
     env:
       OPENCLAW_VITEST_RUNTIME: node
       OPENCLAW_VITEST_MAX_WORKERS: "1"
@@ -43,35 +45,29 @@ jobs:
           git rev-parse HEAD | tee "$PROOF_OUTPUT"/revision.txt
           node --version
           pnpm --version
-      - name: Browser ratchet and focused regressions
-        if: matrix.lane == 'browser'
-        run: |
-          set -o pipefail
-          pnpm check:max-lines-ratchet --base e1e498602cec224ef4adb16f13512ca6aea26d98 2>&1 | tee "$PROOF_OUTPUT"/ratchet.log
-          pnpm exec oxfmt --check ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-queue-state.ts ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts test/vitest/vitest.ui-e2e.config.ts test/vitest/vitest.ui-paths.mjs
-          pnpm --dir ui test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts src/pages/chat/chat-send.test.ts src/pages/chat/chat-outbox-transient-recovery.test.ts 2>&1 | tee "$PROOF_OUTPUT"/browser-focused.log
-      - name: Android continuation regressions after repair
+      - name: Android focused formatting
         if: matrix.lane == 'android-green'
+        run: pnpm exec oxfmt --check src/agents/cron-creator-authority-context.ts src/agents/subagents/requester-cron-authority.ts src/gateway/server-methods/requester-cron-authority.integration.test.ts test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts
+      - name: Android continuation regressions
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           set -o pipefail
           node scripts/run-vitest.mjs run src/gateway/server-methods/requester-cron-authority.integration.test.ts src/agents/cron-creator-authority-context.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/android-continuation.log
+      - name: Upload continuation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: continuation-${{ matrix.lane }}-${{ matrix.revision }}
+          path: ${{ runner.temp }}/authority-proof
+          retention-days: 7
       - name: Android authenticated protocol proof
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'android-green' }}
+        env:
+          # This in-process test owns its provider and empty plugin fixtures; it does not launch dist.
+          OPENCLAW_E2E_SKIP_BUILD: "1"
         run: |
           set -o pipefail
           node scripts/run-vitest.mjs run test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/android-protocol.log
-      - name: Build reviewed browser candidate runtime
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'browser' }}
-        id: build
-        run: |
-          set -o pipefail
-          pnpm build:runtime 2>&1 | tee "$PROOF_OUTPUT"/browser-build.log
-          node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
-      - name: Browser reconnect and automation inventory proof
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.lane == 'browser' }}
-        run: |
-          set -o pipefail
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/browser-runtime.log
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
