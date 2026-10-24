@@ -1,7 +1,6 @@
 name: Automation authority proof
 on:
-  push:
-    branches: [proof/automation-authority]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
