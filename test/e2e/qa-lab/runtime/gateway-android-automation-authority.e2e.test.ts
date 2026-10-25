@@ -234,9 +234,9 @@ it(
       const deniedRead = await run(writer.client, "writer", "get");
       expect(deniedRead).not.toContain("Foreign private payload");
       expect(deniedRead).not.toContain("manager update");
-      expect(deniedRead).toMatch(/not found|not available|scope|permission|denied/i);
+      expect(deniedRead).toContain("automations needs the owner's authority");
       const deniedWrite = await run(writer.client, "writer", "update");
-      expect(deniedWrite).toMatch(/not found|not available|scope|permission|denied/i);
+      expect(deniedWrite).toContain("automations needs the owner's authority");
       expect(await admin.request("cron.get", { id: added.id })).toMatchObject({
         name: "manager update",
       });
