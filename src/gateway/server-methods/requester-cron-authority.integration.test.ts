@@ -421,7 +421,11 @@ describe("requester continuation persisted automation management", () => {
             undefined,
             expect.objectContaining({
               code: "INVALID_REQUEST",
-              message: expect.stringMatching(rejection),
+              message: expect.stringMatching(
+                source === "recovery"
+                  ? rejection
+                  : /invalid cron.get params: Automation admin grant is missing, expired, or already used/,
+              ),
             }),
           );
         } finally {
