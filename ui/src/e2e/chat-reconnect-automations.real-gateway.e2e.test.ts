@@ -1,5 +1,5 @@
-// Only inference is scripted. Browser submissions, authentication, agent tools,
-// and the automation inventory run through the real Gateway.
+// Inference is scripted; one stale leaf is injected to trigger a real admission
+// rejection. Browser recovery, authentication, tools and inventory use the Gateway.
 import { createServer } from "node:http";
 import { buffer } from "node:stream/consumers";
 import { expect, it } from "vitest";
@@ -17,6 +17,7 @@ import {
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import {
   callGateway,
   createChatGatewayInstance,
@@ -30,6 +31,9 @@ import {
 const sessionKey = "agent:main:reconnect-automations";
 const freshPrompt = "List every automation after reconnecting.";
 const queuedPrompt = "List automations from this offline queued request.";
+const restoredPrompt = "List automations from this restored document.";
+const retryPrompt = "List automations after an explicit retry.";
+const prompts = [freshPrompt, queuedPrompt, restoredPrompt, retryPrompt];
 const foreignJobName = "Automation created outside this conversation";
 type Inventory = { scope: string; jobs: Array<{ id: string; name: string }> };
 type Input = { type?: string; name?: string; call_id?: string; output?: string };
@@ -63,11 +67,9 @@ async function startProvider() {
           }
           expect(body.model).toBe("operator");
           const currentStep = step++;
-          expect(currentStep).toBeLessThan(4);
+          expect(currentStep).toBeLessThan(prompts.length * 2);
           if (currentStep % 2 === 0) {
-            expect(JSON.stringify(body.input)).toContain(
-              currentStep === 0 ? freshPrompt : queuedPrompt,
-            );
+            expect(JSON.stringify(body.input)).toContain(prompts[currentStep / 2]);
             writeToolCall(response, "automations", { action: "list", includeDisabled: true });
             return;
           }
@@ -175,7 +177,7 @@ const rpc = async (method: string, params: Record<string, unknown>) =>
   JSON.parse(await callGateway(instance, method, params));
 
 suite.define(() => {
-  it("preserves fresh administrator inventory while an offline queued send stays caller-scoped", async () => {
+  it("preserves fresh administrator inventory while queued, restored and retried input stays caller-scoped", async () => {
     const foreignJob: { id: string } = await rpc("cron.add", {
       name: foreignJobName,
       agentId: "main",
@@ -191,6 +193,7 @@ suite.define(() => {
       const sent: Frame[] = [];
       let reconnectGate = createDeferred();
       reconnectGate.resolve();
+      let rejectRetryAttempt = true;
       let dropConnection: (() => void) | undefined;
       const socketUrl = new URL(suite.server.baseUrl);
       socketUrl.protocol = "ws:";
@@ -198,8 +201,24 @@ suite.define(() => {
         await reconnectGate.promise;
         const server = socket.connectToServer();
         socket.onMessage((message) => {
-          sent.push(JSON.parse(message.toString()) as Frame);
-          server.send(message);
+          const frame = JSON.parse(message.toString()) as Frame;
+          sent.push(frame);
+          if (
+            frame.method === "chat.send" &&
+            frame.params?.message === retryPrompt &&
+            rejectRetryAttempt
+          ) {
+            rejectRetryAttempt = false;
+            // The real Gateway rejects an obsolete transcript leaf before admission.
+            server.send(
+              JSON.stringify({
+                ...frame,
+                params: { ...frame.params, expectedLeafEntryId: "synthetic-obsolete-leaf" },
+              }),
+            );
+          } else {
+            server.send(message);
+          }
         });
         server.onMessage((message) => socket.send(message));
         dropConnection = () => {
@@ -265,6 +284,47 @@ suite.define(() => {
         expect(provider.inventories[1]?.jobs).not.toEqual(
           expect.arrayContaining([expect.objectContaining({ id: foreignJob.id })]),
         );
+        // Reload the real document after durable admission, while reconnect is held.
+        await disconnect();
+        await composer.fill(restoredPrompt);
+        await send.click();
+        await expect
+          .poll(async () =>
+            (await readOutboxQueue(page)).some((item) => item.text === restoredPrompt),
+          )
+          .toBe(true);
+        await page.reload();
+        reconnectGate.resolve();
+        await waitForControlUiGatewayReady(page);
+        await completed(3);
+        expect(
+          sent.find(
+            (frame) => frame.method === "chat.send" && frame.params?.message === restoredPrompt,
+          )?.params,
+        ).toMatchObject({ __controlUiReconnectResume: true });
+        expect(provider.inventories[2]?.scope).toBe("caller");
+        expect(JSON.stringify(provider.inventories[2])).not.toContain(foreignJob.id);
+        expect(JSON.stringify(provider.inventories[2])).not.toContain(foreignJobName);
+
+        // Retry an actual Gateway rejection through the visible recovery action.
+        await disconnect();
+        reconnectGate.resolve();
+        await waitForControlUiGatewayReady(page);
+        await composer.fill(retryPrompt);
+        await send.click();
+        const retry = page.getByRole("button", { name: "Retry queued message", exact: true });
+        await retry.waitFor();
+        expect(provider.inventories).toHaveLength(3);
+        await retry.click();
+        await completed(4);
+        const retrySends = sent.filter(
+          (frame) => frame.method === "chat.send" && frame.params?.message === retryPrompt,
+        );
+        expect(retrySends).toHaveLength(2);
+        expect(retrySends[1]?.params).toMatchObject({ __controlUiReconnectResume: true });
+        expect(provider.inventories[3]?.scope).toBe("caller");
+        expect(JSON.stringify(provider.inventories[3])).not.toContain(foreignJob.id);
+        expect(JSON.stringify(provider.inventories[3])).not.toContain(foreignJobName);
         expect(provider.failures).toEqual([]);
       } finally {
         reconnectGate.resolve();
