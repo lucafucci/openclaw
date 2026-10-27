@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 proof_output=${1:?evidence directory required}
-repo=$PWD
 base=${2:?exact base commit required}
 [[ $base =~ ^[a-f0-9]{40}$ ]]
 baseline="$proof_output/base-red-worktree"
 git worktree add --detach "$baseline" "$base"
 trap 'git worktree remove --force "$baseline"' EXIT
-ln -s "$repo/node_modules" "$baseline/node_modules"
-ln -s "$repo/ui/node_modules" "$baseline/ui/node_modules"
+# Workspace packages own their dependencies (for example markdown-core's micromark).
+# Install the base's frozen graph so workspace links cannot borrow candidate source.
+pnpm --dir "$baseline" install --frozen-lockfile
 cp ui/src/pages/chat/chat-send-submit.test.ts "$baseline/ui/src/pages/chat/chat-send-submit.test.ts"
 # Execute the committed regression against unchanged main production code.
 set +e
@@ -23,11 +23,20 @@ const report=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));
 const tests=report.testResults.flatMap(file=>file.assertionResults).filter(test=>test.status!=="pending"&&test.status!=="skipped");
 const failures=tests.filter(test=>test.status==="failed");
 assert.equal(tests.length,5,"all five recovery contracts must execute");
-assert.equal(failures.length,2,"only the two fresh-input regressions should fail on main");
+const expectedFailures = [
+  "sends current List my automations without consuming the recovery marker",
+  "sends current /approve approval-1 allow-once without consuming the recovery marker",
+  "keeps a restored offline submission marked as recovery",
+  "does not treat an explicit retry of failed input as a fresh submission",
+];
+assert.equal(failures.length,4,"fresh input, restored input, and explicit retry must fail on main");
+assert.deepEqual(failures.map(test=>test.title).sort(),expectedFailures.sort());
 for(const test of failures) {
-  assert.match(test.fullName,/sends current .* without consuming the recovery marker/);
   assert.match(test.failureMessages.join("\n"),/__controlUiReconnectResume/);
 }
-assert.equal(tests.filter(test=>test.status==="passed").length,3);
-console.log("PASS base-red: both fresh-input regressions fail on the recovery marker; all three negative controls pass");
+const passed=tests.filter(test=>test.status==="passed");
+assert.deepEqual(passed.map(test=>test.title),[
+  "does not retain fresh authority across a connection change during preparation",
+]);
+console.log("PASS base-red: all four expected regressions fail on the recovery marker; the connection-change control passes");
 JS
