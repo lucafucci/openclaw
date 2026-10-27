@@ -28,7 +28,6 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=6144
       OPENCLAW_BUILD_PRIVATE_QA: "1"
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
-      OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: ${{ runner.temp }}/authority-proof-diagnostics
     steps:
       - name: Validate immutable input revisions
         shell: bash
@@ -53,6 +52,7 @@ jobs:
           cp .github/authority-proof/* "$PROOF_HELPERS/"
           echo "PROOF_HELPERS=$PROOF_HELPERS" >> "$GITHUB_ENV"
           echo "PROOF_OUTPUT=$PROOF_OUTPUT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_UI_E2E_DIAGNOSTIC_DIR=$RUNNER_TEMP/authority-proof-diagnostics" >> "$GITHUB_ENV"
           git rev-parse HEAD > "$PROOF_OUTPUT/workflow-revision.txt"
       - name: Checkout exact browser candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
