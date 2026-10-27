@@ -102,7 +102,6 @@ describe("fresh input after reconnect", () => {
     const restored = makeChatHost({
       client: source.client,
       currentSessionId: "reconnected-session",
-      reconnectResumeSessionId: "reconnected-session",
     });
 
     await resumeStoredChatOutboxes(restored);
@@ -129,7 +128,6 @@ describe("fresh input after reconnect", () => {
     await handleSendChat(host);
     const failed = expectDefined(host.chatQueue[0], "failed input");
     expect(failed.sendState).toBe("failed");
-    host.reconnectResumeSessionId = "reconnected-session";
 
     await retryQueuedChatMessage(host, failed.id);
 

@@ -66,7 +66,8 @@ export async function requestChatSend(
     !params.intent &&
     !params.isFreshSubmission &&
     sessionId &&
-    state.reconnectResumeSessionId === sessionId,
+    // Durable drains and retries lose the pane's reconnect marker on reload.
+    (params.isFreshSubmission === false || state.reconnectResumeSessionId === sessionId),
   );
   const attachments = buildChatApiAttachments(params.attachments);
   const hasAudio = attachments?.some((attachment) =>
@@ -112,7 +113,7 @@ export async function requestChatSend(
   } finally {
     request.release();
   }
-  if (controlUiReconnectResume) {
+  if (controlUiReconnectResume && state.reconnectResumeSessionId === sessionId) {
     state.reconnectResumeSessionId = null;
   }
   return normalizeChatSendAck(payload, params.runId);
