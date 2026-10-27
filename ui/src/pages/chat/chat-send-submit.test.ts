@@ -106,10 +106,8 @@ describe("fresh input after reconnect", () => {
 
     await resumeStoredChatOutboxes(restored);
 
-    expect(findChatSendPayload(source)).toMatchObject({
-      sessionId: "reconnected-session",
-      __controlUiReconnectResume: true,
-    });
+    expect(findChatSendPayload(source).sessionId).toBe("reconnected-session");
+    expect(findChatSendPayload(source)).toHaveProperty("__controlUiReconnectResume", true);
   });
 
   it("does not treat an explicit retry of failed input as a fresh submission", async () => {
@@ -133,7 +131,7 @@ describe("fresh input after reconnect", () => {
 
     const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
     expect(sends).toHaveLength(2);
-    expect(sends[1]?.[1]).toMatchObject({ __controlUiReconnectResume: true });
+    expect(sends[1]?.[1]).toHaveProperty("__controlUiReconnectResume", true);
   });
 });
 

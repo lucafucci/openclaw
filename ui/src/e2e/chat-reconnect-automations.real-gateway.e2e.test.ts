@@ -1,4 +1,4 @@
-// Inference is scripted; one stale leaf is injected to trigger a real admission
+// Inference is scripted; one malformed leaf is injected to trigger a real admission
 // rejection. Browser recovery, authentication, tools and inventory use the Gateway.
 import { createServer } from "node:http";
 import { buffer } from "node:stream/consumers";
@@ -37,7 +37,13 @@ const prompts = [freshPrompt, queuedPrompt, restoredPrompt, retryPrompt];
 const foreignJobName = "Automation created outside this conversation";
 type Inventory = { scope: string; jobs: Array<{ id: string; name: string }> };
 type Input = { type?: string; name?: string; call_id?: string; output?: string };
-type Frame = { method?: string; params?: Record<string, unknown> };
+type Frame = {
+  id?: string;
+  method?: string;
+  params?: Record<string, unknown>;
+  ok?: boolean;
+  error?: { code?: string; message?: string };
+};
 
 async function startProvider() {
   const failures: string[] = [];
@@ -194,6 +200,8 @@ suite.define(() => {
       let reconnectGate = createDeferred();
       reconnectGate.resolve();
       let rejectRetryAttempt = true;
+      let retryRequestId: string | undefined;
+      let retryRejection: Frame["error"];
       let dropConnection: (() => void) | undefined;
       const socketUrl = new URL(suite.server.baseUrl);
       socketUrl.protocol = "ws:";
@@ -209,18 +217,25 @@ suite.define(() => {
             rejectRetryAttempt
           ) {
             rejectRetryAttempt = false;
-            // The real Gateway rejects an obsolete transcript leaf before admission.
+            retryRequestId = frame.id;
+            // Schema validation rejects this even when the active-run mode is steer.
             server.send(
               JSON.stringify({
                 ...frame,
-                params: { ...frame.params, expectedLeafEntryId: "synthetic-obsolete-leaf" },
+                params: { ...frame.params, expectedLeafEntryId: 0 },
               }),
             );
           } else {
             server.send(message);
           }
         });
-        server.onMessage((message) => socket.send(message));
+        server.onMessage((message) => {
+          const frame = JSON.parse(message.toString()) as Frame;
+          if (retryRequestId && frame.id === retryRequestId && frame.ok === false) {
+            retryRejection = frame.error;
+          }
+          socket.send(message);
+        });
         dropConnection = () => {
           void socket.close({ code: 1012, reason: "synthetic browser reconnect" });
         };
@@ -312,6 +327,12 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await composer.fill(retryPrompt);
         await send.click();
+        await expect
+          .poll(() => retryRejection)
+          .toMatchObject({
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining("expectedLeafEntryId"),
+          });
         const retry = page.getByRole("button", { name: "Retry queued message", exact: true });
         await retry.waitFor();
         expect(provider.inventories).toHaveLength(3);
