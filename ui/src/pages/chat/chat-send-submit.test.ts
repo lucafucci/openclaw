@@ -37,7 +37,7 @@ useChatSendBrowserFixture();
 
 describe("fresh input after reconnect", () => {
   it.each(["List my automations", "/approve approval-1 allow-once"])(
-    "sends current %s without consuming the recovery marker",
+    "resumes the displayed session for current %s as fresh input",
     async (message) => {
       const host = makeChatHost({
         chatMessage: message,
@@ -50,8 +50,8 @@ describe("fresh input after reconnect", () => {
       await handleSendChat(host);
 
       expect(findChatSendPayload(host)).toMatchObject({ sessionId: "reconnected-session" });
-      expect(findChatSendPayload(host)).not.toHaveProperty("__controlUiReconnectResume");
-      expect(host.reconnectResumeSessionId).toBe("reconnected-session");
+      expect(findChatSendPayload(host)).toHaveProperty("__controlUiReconnectResume", "fresh");
+      expect(host.reconnectResumeSessionId).toBeNull();
     },
   );
 

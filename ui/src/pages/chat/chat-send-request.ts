@@ -64,7 +64,6 @@ export async function requestChatSend(
   const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent &&
-    !params.isFreshSubmission &&
     sessionId &&
     // Durable drains and retries lose the pane's reconnect marker on reload.
     (params.isFreshSubmission === false || state.reconnectResumeSessionId === sessionId),
@@ -88,7 +87,9 @@ export async function requestChatSend(
           ? { agentId: selectedAgentId }
           : {}),
         ...(sessionId ? { sessionId } : {}),
-        ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
+        ...(controlUiReconnectResume
+          ? { __controlUiReconnectResume: params.isFreshSubmission ? "fresh" : true }
+          : {}),
         message: params.message,
         ...(params.workContext ? { workContext: params.workContext } : {}),
         ...(params.mentions?.length ? { mentions: params.mentions } : {}),

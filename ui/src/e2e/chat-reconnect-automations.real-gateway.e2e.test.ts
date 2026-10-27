@@ -312,7 +312,7 @@ suite.define(() => {
             expect.objectContaining({ id: foreignJob.id, name: foreignJobName }),
           ]),
         });
-        expect(freshSend?.params).not.toHaveProperty("__controlUiReconnectResume");
+        expect(freshSend?.params).toHaveProperty("__controlUiReconnectResume", "fresh");
 
         await disconnect();
         await composer.fill(queuedPrompt);

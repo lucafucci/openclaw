@@ -92,7 +92,7 @@ async function prepareInput(
         ? {
             systemInputProvenance: externalProvenance,
             systemProvenanceReceipt: sourceReceipt,
-            __controlUiReconnectResume: true,
+            __controlUiReconnectResume: "fresh",
           }
         : {}),
     },
@@ -250,6 +250,7 @@ describe("interrupted chat input recovery", () => {
             fastMode: true,
             timeoutMs: 42_000,
             queueMode: "followup",
+            __controlUiReconnectResume: true,
           });
           expect(JSON.stringify(params)).not.toContain("Original private input");
           expect(readChatInputRecoveryAdmission(target.runId)).toMatchObject({
@@ -267,6 +268,7 @@ describe("interrupted chat input recovery", () => {
             systemProvenanceReceipt: sourceReceipt,
             reconnectResumeRequested: true,
           });
+          expect(normalized.freshReconnectInput).toBeUndefined();
           requestOptions.sessionMutationCommitGuard();
           expect(requestOptions.client.internal.operatorRunAuthority.profileId).toBe(
             fixture.client.authenticatedUserProfile?.profileId,
