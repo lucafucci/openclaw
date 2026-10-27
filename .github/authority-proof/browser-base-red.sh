@@ -24,8 +24,8 @@ const tests=report.testResults.flatMap(file=>file.assertionResults).filter(test=
 const failures=tests.filter(test=>test.status==="failed");
 assert.equal(tests.length,5,"all five recovery contracts must execute");
 const expectedFailures = [
-  "sends current List my automations without consuming the recovery marker",
-  "sends current /approve approval-1 allow-once without consuming the recovery marker",
+  "resumes the displayed session for current List my automations as fresh input",
+  "resumes the displayed session for current /approve approval-1 allow-once as fresh input",
   "keeps a restored offline submission marked as recovery",
   "does not treat an explicit retry of failed input as a fresh submission",
 ];

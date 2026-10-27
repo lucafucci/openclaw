@@ -284,6 +284,7 @@ try {
     }
     const started = await client.request("chat.send", {
       sessionKey: `agent:main:runtime-${label}-${action}`,
+      __controlUiReconnectResume: "fresh",
       message: `${action} the existing automation`,
       idempotencyKey: randomUUID(),
     });
