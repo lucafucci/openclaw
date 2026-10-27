@@ -2,7 +2,13 @@
 // rejection. Browser recovery, authentication, tools and inventory use the Gateway.
 import { createServer } from "node:http";
 import { buffer } from "node:stream/consumers";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it } from "vitest";
+import { evaluateSessionFreshness } from "../../../src/config/sessions/reset-policy.ts";
+import {
+  loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
+} from "../../../src/config/sessions/session-accessor.ts";
 import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
@@ -29,6 +35,7 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:reconnect-automations";
+const reset = { mode: "daily", atHour: 0 } as const;
 const freshPrompt = "List every automation after reconnecting.";
 const queuedPrompt = "List automations from this offline queued request.";
 const restoredPrompt = "List automations from this restored document.";
@@ -152,6 +159,7 @@ const suite = createControlUiE2eSuite({
         },
         config: {
           update: { checkOnStart: false },
+          session: { reset },
           tools: { profile: "full", codeMode: false, toolSearch: false },
           plugins: { allow: ["openai"] },
           models: {
@@ -195,6 +203,23 @@ suite.define(() => {
       delivery: { mode: "none" },
     });
     await rpc("sessions.create", { key: sessionKey, agentId: "main", permissionMode: "full" });
+    await instance.stopGateway();
+    const scope = { sessionKey, agentId: "main", env: instance.env };
+    const entry = expectDefined(loadSessionEntryReadOnly(scope), "created session");
+    const expiredAt = Date.now() - 48 * 60 * 60 * 1000;
+    const stale = {
+      ...entry,
+      updatedAt: expiredAt,
+      sessionStartedAt: expiredAt,
+      lastInteractionAt: expiredAt,
+    };
+    // Seed only while offline; startGateway closes parent database handles before boot.
+    replaceSessionEntrySync(scope, stale);
+    expect(evaluateSessionFreshness({ ...stale, now: Date.now(), policy: reset })).toMatchObject({
+      fresh: false,
+      staleReason: "daily",
+    });
+    await instance.startGateway();
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const sent: Frame[] = [];
       let reconnectGate = createDeferred();
@@ -272,6 +297,11 @@ suite.define(() => {
         await composer.fill(freshPrompt);
         await send.click();
         await completed(1);
+        expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+          sessionId: stale.sessionId,
+          sessionStartedAt: stale.sessionStartedAt,
+          lifecycleRevision: stale.lifecycleRevision,
+        });
         const freshSend = sent.find(
           (frame) => frame.method === "chat.send" && frame.params?.message === freshPrompt,
         );
