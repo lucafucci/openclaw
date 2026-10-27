@@ -1,33 +1,75 @@
 name: Automation authority proof
 on:
   workflow_dispatch:
+    inputs:
+      revision:
+        description: Browser PR candidate, full 40-character commit SHA
+        required: true
+        type: string
+      base:
+        description: Exact upstream base, full 40-character commit SHA
+        required: true
+        type: string
 permissions:
   contents: read
 jobs:
   proof:
     if: github.repository == 'lucafucci/openclaw'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - lane: android-green
-            revision: b7e2173a3e4298d665d9163d0cb8be62341cbbe1
-          - lane: android-red
-            revision: 4c65e292c6c685d0a6eeb26927656d908b61c297
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     env:
+      PROOF_REVISION: ${{ inputs.revision }}
+      PROOF_BASE: ${{ inputs.base }}
       OPENCLAW_VITEST_RUNTIME: node
       OPENCLAW_VITEST_MAX_WORKERS: "1"
       NODE_OPTIONS: --max-old-space-size=6144
       OPENCLAW_BUILD_PRIVATE_QA: "1"
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
+      OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: ${{ runner.temp }}/authority-proof-diagnostics
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Validate immutable input revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PROOF_REVISION" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PROOF_BASE" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PROOF_REVISION" != "$PROOF_BASE" ]]
+      - name: Checkout workflow-owned proof helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ matrix.revision }}
+          ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 3
+          fetch-depth: 1
+      - name: Preserve helpers outside the candidate checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROOF_HELPERS="$RUNNER_TEMP/authority-proof-helpers"
+          PROOF_OUTPUT="$RUNNER_TEMP/authority-proof-evidence"
+          mkdir -p "$PROOF_HELPERS" "$PROOF_OUTPUT"
+          cp .github/authority-proof/* "$PROOF_HELPERS/"
+          echo "PROOF_HELPERS=$PROOF_HELPERS" >> "$GITHUB_ENV"
+          echo "PROOF_OUTPUT=$PROOF_OUTPUT" >> "$GITHUB_ENV"
+          git rev-parse HEAD > "$PROOF_OUTPUT/workflow-revision.txt"
+      - name: Checkout exact browser candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Pin candidate and base evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ $(git rev-parse HEAD) == "$PROOF_REVISION" ]]
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$PROOF_BASE"
+          [[ $(git rev-parse "$PROOF_BASE^{commit}") == "$PROOF_BASE" ]]
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf '%s\n' "$PROOF_REVISION" > "$PROOF_OUTPUT/revision.txt"
+          printf '%s\n' "$PROOF_BASE" > "$PROOF_OUTPUT/base.txt"
       - name: Setup pinned toolchain and dependencies
         id: setup
         uses: ./.github/actions/setup-node-env
@@ -36,41 +78,79 @@ jobs:
           install-bun: "false"
           semantic-checks: "true"
           cache-mode: off
-      - name: Pin evidence
+      - name: Record toolchain
         run: |
-          PROOF_OUTPUT="$RUNNER_TEMP/authority-proof"
-          echo "PROOF_OUTPUT=$PROOF_OUTPUT" >> "$GITHUB_ENV"
-          mkdir -p "$PROOF_OUTPUT"
-          git rev-parse HEAD | tee "$PROOF_OUTPUT"/revision.txt
-          node --version
-          pnpm --version
-      - name: Android focused formatting
-        if: matrix.lane == 'android-green'
-        run: pnpm exec oxfmt --check src/agents/cron-creator-authority-context.ts src/agents/subagents/requester-cron-authority.ts src/gateway/server-methods/requester-cron-authority.integration.test.ts test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts
-      - name: Android continuation regressions
+          node --version | tee "$PROOF_OUTPUT/node-version.txt"
+          pnpm --version | tee "$PROOF_OUTPUT/pnpm-version.txt"
+      - name: Focused formatting
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
-          set -o pipefail
-          node scripts/run-vitest.mjs run src/gateway/server-methods/requester-cron-authority.integration.test.ts src/agents/cron-creator-authority-context.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/android-continuation.log
-      - name: Upload continuation evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: continuation-${{ matrix.lane }}-${{ matrix.revision }}
-          path: ${{ runner.temp }}/authority-proof
-          retention-days: 7
-      - name: Android authenticated protocol proof
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'android-green' }}
-        env:
-          # This in-process test owns its provider and empty plugin fixtures; it does not launch dist.
-          OPENCLAW_E2E_SKIP_BUILD: "1"
+          pnpm exec oxfmt --check ui/src/pages/chat/chat-outbox-drain.ts ui/src/pages/chat/chat-send-delivery.runtime.ts ui/src/pages/chat/chat-send-detached-command.ts ui/src/pages/chat/chat-send-eligibility.ts ui/src/pages/chat/chat-send-request.ts ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-submit.test.ts ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts test/vitest/vitest.ui-e2e.config.ts test/vitest/vitest.ui-paths.mjs test/vitest-ui-e2e-config.test.ts 2>&1 | tee "$PROOF_OUTPUT/format.log"
+      - name: E2E ownership contracts
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
-          set -o pipefail
-          node scripts/run-vitest.mjs run test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT"/android-protocol.log
-      - name: Upload test evidence
+          node scripts/run-vitest.mjs run test/vitest-ui-e2e-config.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/ownership.log"
+      - name: Test-line ratchet against exact base
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          pnpm check:test-lines-ratchet --base "$PROOF_BASE" --no-merge-base 2>&1 | tee "$PROOF_OUTPUT/test-lines.log"
+      - name: File-length ratchet against exact base
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          pnpm check:max-lines-ratchet --base "$PROOF_BASE" --no-merge-base 2>&1 | tee "$PROOF_OUTPUT/max-lines.log"
+      - name: Focused chat recovery suites
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          pnpm --dir ui test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts src/pages/chat/chat-send.test.ts src/pages/chat/chat-outbox-transient-recovery.test.ts 2>&1 | tee "$PROOF_OUTPUT/focused.log"
+      - name: Base-red fresh-input regressions and negative controls
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          bash "$PROOF_HELPERS/browser-base-red.sh" "$PROOF_OUTPUT" "$PROOF_BASE" 2>&1 | tee "$PROOF_OUTPUT/base-red.log"
+      - name: Build compiled Gateway and Control UI
+        id: build
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          pnpm build:runtime 2>&1 | tee "$PROOF_OUTPUT/build.log"
+      - name: Prepare Chromium
+        id: chromium
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium 2>&1 | tee "$PROOF_OUTPUT/chromium.log"
+      - name: Corrected upstream browser scenarios
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        run: |
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-header-subagents.e2e.test.ts ui/src/e2e/chat-boot-optional-requests.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/upstream-browser.log"
+      - name: Reconnect automation browser flow against the real Gateway
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        run: |
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/reconnect-browser.log"
+      - name: Compiled Gateway authority, persistence, and revocation
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          node --import ./scripts/tsx.mjs "$PROOF_HELPERS/browser-runtime-proof.mts" "$PROOF_OUTPUT" 2>&1 | tee "$PROOF_OUTPUT/runtime.log"
+      - name: Upload exact-revision evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: authority-${{ matrix.lane }}-${{ matrix.revision }}
-          path: ${{ runner.temp }}/authority-proof
+          name: browser-authority-${{ inputs.revision }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/authority-proof-evidence/format.log
+            ${{ runner.temp }}/authority-proof-evidence/ownership.log
+            ${{ runner.temp }}/authority-proof-evidence/test-lines.log
+            ${{ runner.temp }}/authority-proof-evidence/max-lines.log
+            ${{ runner.temp }}/authority-proof-evidence/focused.log
+            ${{ runner.temp }}/authority-proof-evidence/base-red.log
+            ${{ runner.temp }}/authority-proof-evidence/base-red-vitest.json
+            ${{ runner.temp }}/authority-proof-evidence/build.log
+            ${{ runner.temp }}/authority-proof-evidence/chromium.log
+            ${{ runner.temp }}/authority-proof-evidence/upstream-browser.log
+            ${{ runner.temp }}/authority-proof-evidence/reconnect-browser.log
+            ${{ runner.temp }}/authority-proof-evidence/runtime.log
+            ${{ runner.temp }}/authority-proof-evidence/runtime-summary.json
+            ${{ runner.temp }}/authority-proof-evidence/revision.txt
+            ${{ runner.temp }}/authority-proof-evidence/base.txt
+            ${{ runner.temp }}/authority-proof-evidence/workflow-revision.txt
+            ${{ runner.temp }}/authority-proof-evidence/node-version.txt
+            ${{ runner.temp }}/authority-proof-evidence/pnpm-version.txt
+            ${{ runner.temp }}/authority-proof-diagnostics/**/failure.public.json
           retention-days: 7
