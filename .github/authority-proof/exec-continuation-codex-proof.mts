@@ -139,6 +139,8 @@ async function main() {
     console.log(`PASS ${name}`);
   };
   let scenarioStarted = false;
+  let releaseForeground!: () => void;
+  const foregroundGate = new Promise<void>((resolve) => { releaseForeground = resolve; });
   let calls = 0;
   const outputs: string[] = [];
   let providerFailure: unknown;
@@ -204,6 +206,7 @@ async function main() {
       );
       calls++;
       if (calls === 1) {
+        await foregroundGate;
         writeToolCall(response, "gateway_exec", {
           command: `${process.execPath} -e 'setTimeout(() => console.log("BACKGROUND_FINISHED"), 15000)'`,
           yieldMs: 1000,
@@ -436,6 +439,14 @@ async function main() {
       message: "Start the background fixture and report when it finishes",
       idempotencyKey: randomUUID(),
     });
+    const foregroundDeadline = Date.now() + 30_000;
+    while (calls === 0 && !providerFailure && Date.now() < foregroundDeadline) await delay(100);
+    assert.equal(calls, 1, "foreground model request must be active before disconnect");
+    // The reported incident disconnected during the foreground turn, before exec
+    // began. Keep the admitted run active while retiring its client transport.
+    await manager.client.stopAndWait();
+    record("original_client_disconnected_before_background_start");
+    releaseForeground();
     const first = await admin.request(
       "agent.wait",
       { runId: started.runId, timeoutMs: 60000 },
@@ -450,8 +461,6 @@ async function main() {
       "command must actually be backgrounded",
     );
     stage = "background-exec-continuation";
-    await manager.client.stopAndWait();
-    record("original_client_disconnected_after_background_start");
     const deadline2 = Date.now() + 45000;
     let failure = false;
     while (Date.now() < deadline2) {
@@ -493,6 +502,7 @@ async function main() {
     assert.equal(failure, false, "background follow-up reused inactive Gateway authority");
     assert.ok(summary.resumed, "background completion did not execute authorized follow-up");
   } finally {
+    releaseForeground();
     await Promise.allSettled(clients.map((client) => client.stopAndWait()));
     if (child.pid && child.exitCode === null) {
       process.kill(-child.pid, "SIGTERM");
