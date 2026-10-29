@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -23,6 +23,7 @@ import {
   findChatSendPayload,
   makeChatHost,
 } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { retryQueuedChatMessage, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -83,6 +84,8 @@ describe("fresh input after reconnect", () => {
           "chat.send": { status: "started" },
         },
       });
+      const unsubscribe = chatOutboxOwner(host).subscribe(host);
+      onTestFinished(unsubscribe);
       await handleSendChat(host, undefined, { followUpMode: "queue" });
       await resumeStoredChatOutboxes(host);
       expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
@@ -100,14 +103,17 @@ describe("fresh input after reconnect", () => {
       });
       let drainHost = host;
       if (scenario === "reloaded") {
+        unsubscribe();
         reloadChatDocumentStorage([]);
         drainHost = makeChatHost({ client: host.client, currentSessionId: sessionId });
+        onTestFinished(chatOutboxOwner(drainHost).subscribe(drainHost));
       }
       await resumeStoredChatOutboxes(drainHost);
-      expect(findChatSendPayload(host)).toMatchObject({
-        sessionId,
-        __controlUiReconnectResume: scenario === "current" ? "fresh" : true,
-      });
+      expect(findChatSendPayload(host).sessionId).toBe(sessionId);
+      expect(findChatSendPayload(host)).toHaveProperty(
+        "__controlUiReconnectResume",
+        scenario === "current" ? "fresh" : true,
+      );
     },
   );
 

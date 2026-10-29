@@ -306,16 +306,6 @@ suite.define(() => {
         await composer.fill(freshPrompt);
         await send.click();
         await expect.poll(() => provider.inventories.length).toBe(1);
-        await composer.fill(onlineQueuedPrompt);
-        await page.getByRole("button", { name: "Queue message", exact: true }).click();
-        await expect
-          .poll(async () =>
-            (await readOutboxQueue(page)).some((item) => item.text === onlineQueuedPrompt),
-          )
-          .toBe(true);
-        expect(sent.some((frame) => frame.params?.message === onlineQueuedPrompt)).toBe(false);
-        provider.releaseFirstReply();
-        await completed(2);
         expect(loadSessionEntryReadOnly(scope)).toMatchObject({
           sessionId: stale.sessionId,
           sessionStartedAt: stale.sessionStartedAt,
@@ -332,6 +322,21 @@ suite.define(() => {
           ]),
         });
         expect(freshSend?.params).toHaveProperty("__controlUiReconnectResume", "fresh");
+        await composer.fill(onlineQueuedPrompt);
+        await page.getByRole("button", { name: "Queue message", exact: true }).click();
+        await expect
+          .poll(async () =>
+            (await readOutboxQueue(page)).some((item) => item.text === onlineQueuedPrompt),
+          )
+          .toBe(true);
+        expect(sent.some((frame) => frame.params?.message === onlineQueuedPrompt)).toBe(false);
+        provider.releaseFirstReply();
+        await completed(2);
+        // The next ordinary turn applies daily rollover after the reconnect-only resume.
+        const rolled = loadSessionEntryReadOnly(scope);
+        expect(rolled?.sessionId).toBe(stale.sessionId);
+        expect(rolled?.sessionStartedAt).toBeGreaterThan(stale.sessionStartedAt);
+        expect(rolled?.lifecycleRevision).not.toBe(stale.lifecycleRevision);
         expect(provider.inventories[1]).toMatchObject({
           scope: "gateway",
           jobs: expect.arrayContaining([
