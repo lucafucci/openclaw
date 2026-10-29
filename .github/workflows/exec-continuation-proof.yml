@@ -78,6 +78,7 @@ jobs:
             ${{ runner.temp }}/exec-continuation-evidence/*/result.json
             ${{ runner.temp }}/exec-continuation-evidence/*/proof.log
             ${{ runner.temp }}/exec-continuation-evidence/*/native-tool-catalog.json
+            ${{ runner.temp }}/exec-continuation-evidence/*/native-tool-catalog-history.json
             ${{ runner.temp }}/exec-continuation-evidence/*/plugin-install-result.json
           retention-days: 7
           if-no-files-found: warn

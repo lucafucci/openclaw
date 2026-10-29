@@ -143,6 +143,7 @@ async function main() {
   let providerFailure: unknown;
   const nativeUserAgents = new Set<string>();
   let advertisedHostTools: string[] = [];
+  const catalogHistory: Array<Record<string, unknown>> = [];
   stage = "synthetic-provider-setup";
   const provider = createServer((request, response) => {
     void (async () => {
@@ -155,7 +156,8 @@ async function main() {
       const body: {
         model: string;
         input?: Array<{ type?: string; output?: unknown }>;
-        tools?: Array<{ type?: string; name?: string }>;
+        tools?: Array<{ type?: string; name?: string; tools?: Array<{ type?: string; name?: string }> }>;
+        previous_response_id?: string;
       } = JSON.parse(
         Buffer.concat(chunks).toString("utf8"),
       );
@@ -164,6 +166,17 @@ async function main() {
       const toolNames = (body.tools ?? [])
         .filter((tool) => tool.type === "function")
         .map((tool) => tool.name);
+      if (catalogHistory.length < 6) {
+        catalogHistory.push({
+          callsBeforeRequest: calls,
+          toolsPresent: Object.hasOwn(body, "tools"),
+          previousResponsePresent: Boolean(body.previous_response_id),
+          tools: (body.tools ?? []).map(({ type, name, tools }) => ({
+            type, name, tools: tools?.map(({ type, name }) => ({ type, name })),
+          })),
+        });
+        await fs.writeFile(path.join(output, "native-tool-catalog-history.json"), JSON.stringify(catalogHistory, null, 2));
+      }
       if (calls === 0) {
         await fs.writeFile(path.join(output, "native-tool-catalog.json"), JSON.stringify({
           model: body.model,
@@ -428,7 +441,7 @@ async function main() {
     while (Date.now() < deadline2) {
       const log = await fs.readFile(path.join(output, "gateway-runtime.log"), "utf8");
       failure = log.includes("Gateway caller authority is no longer active");
-      if (failure || calls >= 4) break;
+      if (failure || providerFailure || calls >= 4) break;
       await delay(250);
     }
     // This Gateway uses only the synthetic fixture. Keep diagnostic events bounded,
@@ -446,6 +459,7 @@ async function main() {
       nativeCodexVersion: nativePackage.version,
       nativeUserAgents: [...nativeUserAgents],
       advertisedHostTools,
+      providerFailure: providerFailure instanceof Error ? providerFailure.message.split("\n")[0] : undefined,
       configuredRuntime: "codex",
       toolProfile: "full",
       nodeVersion: process.version,
