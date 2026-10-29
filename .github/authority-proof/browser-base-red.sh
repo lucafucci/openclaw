@@ -12,7 +12,7 @@ pnpm --dir "$baseline" install --frozen-lockfile
 cp ui/src/pages/chat/chat-send-submit.test.ts "$baseline/ui/src/pages/chat/chat-send-submit.test.ts"
 # Execute the committed regression against unchanged main production code.
 set +e
-pnpm --dir "$baseline/ui" test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts --testNamePattern='fresh input after reconnect' --reporter=json --outputFile="$proof_output/base-red-vitest.json"
+pnpm --dir "$baseline/ui" test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts --testNamePattern='resumes the displayed session for current|does not retain fresh authority across a connection change|keeps a restored offline submission|does not treat an explicit retry of failed durable input' --reporter=json --outputFile="$proof_output/base-red-vitest.json"
 result=$?
 set -e
 [[ $result == 1 ]]
@@ -27,7 +27,7 @@ const expectedFailures = [
   "resumes the displayed session for current List my automations as fresh input",
   "resumes the displayed session for current /approve approval-1 allow-once as fresh input",
   "keeps a restored offline submission marked as recovery",
-  "does not treat an explicit retry of failed input as a fresh submission",
+  "does not treat an explicit retry of failed durable input as a fresh submission",
 ];
 assert.equal(failures.length,4,"fresh input, restored input, and explicit retry must fail on main");
 assert.deepEqual(failures.map(test=>test.title).sort(),expectedFailures.sort());

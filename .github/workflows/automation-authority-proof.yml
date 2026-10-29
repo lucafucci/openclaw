@@ -23,6 +23,7 @@ jobs:
     env:
       PROOF_REVISION: ${{ inputs.revision }}
       PROOF_BASE: ${{ inputs.base }}
+      PROOF_QUEUE_BASE: 436ef3edba92532ebd95114bbcc0a5a0fa1f5aa5
       OPENCLAW_VITEST_RUNTIME: node
       OPENCLAW_VITEST_MAX_WORKERS: "1"
       NODE_OPTIONS: --max-old-space-size=6144
@@ -49,7 +50,7 @@ jobs:
           PROOF_HELPERS="$RUNNER_TEMP/authority-proof-helpers"
           PROOF_OUTPUT="$RUNNER_TEMP/authority-proof-evidence"
           mkdir -p "$PROOF_HELPERS" "$PROOF_OUTPUT"
-          cp .github/authority-proof/* "$PROOF_HELPERS/"
+          cp .github/authority-proof/browser-base-red.sh .github/authority-proof/browser-queue-base-red.sh .github/authority-proof/browser-runtime-proof.mts "$PROOF_HELPERS/"
           echo "PROOF_HELPERS=$PROOF_HELPERS" >> "$GITHUB_ENV"
           echo "PROOF_OUTPUT=$PROOF_OUTPUT" >> "$GITHUB_ENV"
           echo "OPENCLAW_UI_E2E_DIAGNOSTIC_DIR=$RUNNER_TEMP/authority-proof-diagnostics" >> "$GITHUB_ENV"
@@ -67,9 +68,12 @@ jobs:
           [[ $(git rev-parse HEAD) == "$PROOF_REVISION" ]]
           git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$PROOF_BASE"
           [[ $(git rev-parse "$PROOF_BASE^{commit}") == "$PROOF_BASE" ]]
+          git fetch --no-tags --depth=1 https://github.com/lucafucci/openclaw.git "$PROOF_QUEUE_BASE"
+          [[ $(git rev-parse "$PROOF_QUEUE_BASE^{commit}") == "$PROOF_QUEUE_BASE" ]]
           test -z "$(git status --porcelain --untracked-files=all)"
           printf '%s\n' "$PROOF_REVISION" > "$PROOF_OUTPUT/revision.txt"
           printf '%s\n' "$PROOF_BASE" > "$PROOF_OUTPUT/base.txt"
+          printf '%s\n' "$PROOF_QUEUE_BASE" > "$PROOF_OUTPUT/queue-base.txt"
       - name: Setup pinned toolchain and dependencies
         id: setup
         uses: ./.github/actions/setup-node-env
@@ -85,7 +89,7 @@ jobs:
       - name: Focused formatting
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
-          pnpm exec oxfmt --check src/gateway/server-methods/chat-server-timing.ts src/gateway/server-methods/chat-send-request.ts src/gateway/server-methods/chat-send-input-dispatch.ts src/gateway/server-methods/chat-send-request.test.ts src/gateway/chat-input-recovery.test.ts ui/src/pages/chat/chat-outbox-recovery-scope.test.ts ui/src/e2e/chat-outbox-payloads.e2e.test.ts ui/src/pages/chat/chat-outbox-drain.ts ui/src/pages/chat/chat-send-delivery.runtime.ts ui/src/pages/chat/chat-send-detached-command.ts ui/src/pages/chat/chat-send-eligibility.ts ui/src/pages/chat/chat-send-request.ts ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-submit.test.ts ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts test/vitest/vitest.ui-e2e.config.ts test/vitest/vitest.ui-paths.mjs test/vitest-ui-e2e-config.test.ts 2>&1 | tee "$PROOF_OUTPUT/format.log"
+          pnpm exec oxfmt --check ui/src/pages/chat/chat-send-actions.ts ui/src/lib/chat/chat-types.ts ui/src/pages/chat/chat-outbox-owner.projection.ts src/gateway/server-methods/chat-server-timing.ts src/gateway/server-methods/chat-send-request.ts src/gateway/server-methods/chat-send-input-dispatch.ts src/gateway/server-methods/chat-send-request.test.ts ui/src/pages/chat/chat-outbox-recovery-scope.test.ts ui/src/e2e/chat-outbox-payloads.e2e.test.ts ui/src/pages/chat/chat-outbox-drain.ts ui/src/pages/chat/chat-send-delivery.runtime.ts ui/src/pages/chat/chat-send-detached-command.ts ui/src/pages/chat/chat-send-eligibility.ts ui/src/pages/chat/chat-send-request.ts ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-submit.test.ts ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts test/vitest/vitest.ui-e2e.config.ts test/vitest/vitest.ui-paths.mjs test/vitest-ui-e2e-config.test.ts 2>&1 | tee "$PROOF_OUTPUT/format.log"
       - name: E2E ownership contracts
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
@@ -93,7 +97,7 @@ jobs:
       - name: Focused source and repaired upstream lint
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
-          pnpm exec oxlint src/gateway/server-methods/chat-server-timing.ts src/gateway/server-methods/chat-send-request.ts src/gateway/server-methods/chat-send-input-dispatch.ts ui/src/pages/chat/chat-send-request.ts ui/src/pages/new-session/draft-body.browser.test.tsx ui/src/pages/chat/chat-content-column.browser.test.tsx 2>&1 | tee "$PROOF_OUTPUT/lint.log"
+          pnpm exec oxlint ui/src/pages/chat/chat-send-actions.ts ui/src/lib/chat/chat-types.ts ui/src/pages/chat/chat-outbox-owner.projection.ts ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-delivery.runtime.ts src/gateway/server-methods/chat-server-timing.ts src/gateway/server-methods/chat-send-request.ts src/gateway/server-methods/chat-send-input-dispatch.ts ui/src/pages/chat/chat-send-request.ts ui/src/pages/new-session/draft-body.browser.test.tsx ui/src/pages/chat/chat-content-column.browser.test.tsx 2>&1 | tee "$PROOF_OUTPUT/lint.log"
       - name: Test-line ratchet against exact base
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
@@ -110,6 +114,10 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           bash "$PROOF_HELPERS/browser-base-red.sh" "$PROOF_OUTPUT" "$PROOF_BASE" 2>&1 | tee "$PROOF_OUTPUT/base-red.log"
+      - name: Queue regression against previous PR production
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          bash "$PROOF_HELPERS/browser-queue-base-red.sh" "$PROOF_OUTPUT" "$PROOF_QUEUE_BASE" 2>&1 | tee "$PROOF_OUTPUT/queue-base-red.log"
       - name: Build compiled Gateway and Control UI
         id: build
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -120,14 +128,14 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium 2>&1 | tee "$PROOF_OUTPUT/chromium.log"
-      - name: Gateway reconnect normalization and durable recovery
+      - name: Gateway reconnect normalization and queued recovery
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/chat-send-request.test.ts src/gateway/chat-input-recovery.test.ts src/gateway/server.chat-dashboard-title-rollover.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/gateway-recovery.log"
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/chat-send-request.test.ts src/gateway/server.chat-dashboard-title-rollover.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/gateway-recovery.log"
       - name: Corrected upstream browser scenarios
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         run: |
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-header-subagents.e2e.test.ts ui/src/e2e/chat-boot-optional-requests.e2e.test.ts ui/src/e2e/chat-outbox-payloads.e2e.test.ts ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts ui/src/e2e/new-session-page.transition.e2e.test.ts ui/src/e2e/command-palette-drop.e2e.test.ts ui/src/e2e/theme-surfaces.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/upstream-browser.log"
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-header-subagents.e2e.test.ts ui/src/e2e/chat-boot-optional-requests.e2e.test.ts ui/src/e2e/chat-outbox-payloads.e2e.test.ts ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts ui/src/e2e/new-session-page.transition.e2e.test.ts ui/src/e2e/new-session-page.prompt-attachments.e2e.test.ts ui/src/e2e/command-palette-drop.e2e.test.ts ui/src/e2e/theme-surfaces.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/upstream-browser.log"
       - name: Reconnect automation browser flow against the real Gateway
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
         run: |
@@ -151,6 +159,9 @@ jobs:
             ${{ runner.temp }}/authority-proof-evidence/gateway-recovery.log
             ${{ runner.temp }}/authority-proof-evidence/base-red.log
             ${{ runner.temp }}/authority-proof-evidence/base-red-vitest.json
+            ${{ runner.temp }}/authority-proof-evidence/queue-base-red.log
+            ${{ runner.temp }}/authority-proof-evidence/queue-base-red-vitest.json
+            ${{ runner.temp }}/authority-proof-evidence/queue-base.txt
             ${{ runner.temp }}/authority-proof-evidence/build.log
             ${{ runner.temp }}/authority-proof-evidence/chromium.log
             ${{ runner.temp }}/authority-proof-evidence/upstream-browser.log
