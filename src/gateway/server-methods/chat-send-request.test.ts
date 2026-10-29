@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
+import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -101,6 +102,32 @@ it.each([
     expect(result.value.freshReconnectInput).toBe(fresh);
   }
   expect(params).toHaveProperty("__controlUiReconnectResume", resume);
+});
+
+it("does not restore fresh authority from an accepted queued input", async () => {
+  const result = await queuedChatInputAdmission.run(
+    {
+      target: {
+        agentId: "main",
+        storePath: "/synthetic/queued-input/sessions",
+        sessionKey: "agent:main:main",
+        sessionId: "queued-session",
+        runId: "request-1",
+        message: {
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+          __openclaw: { chatRequestIdentity: "accepted-request-identity" },
+        },
+        requestHash: "accepted-request-hash",
+      },
+      requestFingerprint: "accepted-request-fingerprint",
+    },
+    () => normalizeValue({ __controlUiReconnectResume: "fresh" }),
+  );
+  expect(result.reconnectResumeRequested).toBe(true);
+  expect(result.freshReconnectInput).toBeUndefined();
+  expect(result.requestIdentity).toBe("accepted-request-identity");
 });
 
 it.each([

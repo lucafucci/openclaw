@@ -819,6 +819,21 @@ selection; global PostgreSQL support alone is insufficient. A target without
 that proof is refused. A raw package-manager downgrade does not provide this
 guard.
 
+Agent schema admission recognizes the local PostgreSQL anchor and reads the
+matching server store's version without migrating it. An older server schema can
+therefore reach the stopped-writer migration phase; a newer schema or mismatched
+anchor identity still refuses the update.
+
+Update Doctor and `openclaw update repair` select the configured engines before
+reading maintenance state. Doctor inspects configured PostgreSQL agents without
+opening them as runtime stores, then applies their forward migrations with writers
+stopped. Transcript migration detection uses the selected engine's catalog. The local
+anchors remain identity files; SQLite repair and reclamation leave them untouched.
+Gateway startup still requires the completed PostgreSQL migration.
+The delegated update Doctor installs the same one-shot database role as standalone
+Doctor before maintenance, so its PostgreSQL reads and cleanup can finish. This
+repair must be present in the candidate runtime; Gateway access remains worker-only.
+
 Before mutation, the updater captures exact PostgreSQL rows, sequence allocation
 state, schema facts, and matching anchors alongside local SQLite state and config.
 Recovery restores into fresh namespaces and publishes matching anchors. It
@@ -898,8 +913,9 @@ backfills the generated sketches without building an HNSW index; ordinary writes
 maintain them automatically. Canonical embeddings, zero-vector eligibility and
 the result shape are unchanged, and backup/port operations rebuild the sketches.
 
-Scores and tokenization are engine-local. Expect different ordering from SQLite
-BM25, particularly for punctuation, compound words, and Unicode. Hybrid retrieval
+Scores are engine-local. Expect different ordering from SQLite BM25 and different
+Unicode normalization; punctuation runs are replaced by spaces before indexing and
+querying, so words inside dates, paths, and file names match as on SQLite. Hybrid retrieval
 keeps the existing text/vector weighting, not cross-engine score equivalence.
 Memory full-text rank uses unnormalized frequency ranking (`ts_rank`) and maps
 its rank `r` to `r / (r + 0.0027)` before the shared hybrid merge. This calibration
