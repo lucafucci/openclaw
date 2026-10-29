@@ -123,6 +123,7 @@ async function main() {
     TEST_TLS_CERT_PEM,
     TEST_TLS_KEY_PEM,
     writeToolCall,
+    writeToolCallResponse,
     writeOpenAiResponsesText,
     createOpenAiResponsesModelConfig,
   } = await import("./exec-continuation-fixtures.mts");
@@ -184,9 +185,17 @@ async function main() {
           tools: (body.tools ?? []).map(({ type, name }) => ({ type, name })),
         }, null, 2));
       }
-      assert.ok(toolNames.includes("gateway_exec"), "native Codex must advertise host gateway_exec");
-      assert.ok(toolNames.includes("gateway_process"), "native Codex must advertise host gateway_process");
-      advertisedHostTools = ["gateway_exec", "gateway_process"];
+      const gatewayAliases = toolNames.includes("gateway_exec") && toolNames.includes("gateway_process");
+      const directTools = body.tools?.find((tool) => tool.type === "namespace" && tool.name === "openclaw_direct")?.tools;
+      const directShell = directTools?.some((tool) => tool.type === "function" && tool.name === "exec") &&
+        directTools.some((tool) => tool.type === "function" && tool.name === "process");
+      if (calls < 2) assert.ok(gatewayAliases, "foreground must exercise the host gateway_exec projection");
+      assert.ok(gatewayAliases || directShell, "continuation must advertise an OpenClaw host exec/process pair");
+      // Restricted continuation turns expose the same host tools in a namespace.
+      // Never substitute Codex native exec_command: it bypasses OpenClaw completion.
+      const shellTool = gatewayAliases ? { name: "gateway_exec" } : { name: "exec", namespace: "openclaw_direct" };
+      advertisedHostTools = [...new Set([...advertisedHostTools,
+        ...(gatewayAliases ? ["gateway_exec", "gateway_process"] : ["openclaw_direct.exec", "openclaw_direct.process"])])];
       assert.ok(scenarioStarted, "unexpected model call outside a scenario");
       outputs.push(
         ...(body.input ?? [])
@@ -201,7 +210,14 @@ async function main() {
           timeoutSeconds: 30,
         });
       } else if (calls === 3) {
-        writeToolCall(response, "gateway_exec", { command: "printf RESUME_TOOL_OK", yieldMs: 1000 });
+        const id = randomUUID();
+        const item = {
+          type: "function_call", id: `fc_${id}`, call_id: `call_${id}`,
+          ...shellTool,
+          arguments: JSON.stringify({ command: "printf RESUME_TOOL_OK", yieldMs: 1000 }),
+          status: "completed",
+        };
+        writeToolCallResponse(response, item, `resp_${id}`, 10, 2);
       } else {
         writeOpenAiResponsesText(response, {
           text: calls === 2 ? "WAITING_FOR_BACKGROUND" : "RESUMED_WITH_AUTHORITY",
