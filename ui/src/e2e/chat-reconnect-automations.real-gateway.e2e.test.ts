@@ -37,10 +37,11 @@ import {
 const sessionKey = "agent:main:reconnect-automations";
 const reset = { mode: "daily", atHour: 0 } as const;
 const freshPrompt = "List every automation after reconnecting.";
+const onlineQueuedPrompt = "List every automation after the active reply finishes.";
 const queuedPrompt = "List automations from this offline queued request.";
 const restoredPrompt = "List automations from this restored document.";
 const retryPrompt = "List automations after an explicit retry.";
-const prompts = [freshPrompt, queuedPrompt, restoredPrompt, retryPrompt];
+const prompts = [freshPrompt, onlineQueuedPrompt, queuedPrompt, restoredPrompt, retryPrompt];
 const foreignJobName = "Automation created outside this conversation";
 type Inventory = { scope: string; jobs: Array<{ id: string; name: string }> };
 type Input = { type?: string; name?: string; call_id?: string; output?: string };
@@ -57,6 +58,7 @@ async function startProvider() {
   const inventories: Inventory[] = [];
   const handlers = new Set<Promise<void>>();
   let step = 0;
+  const firstReply = createDeferred();
   const owned = await reserveTestPortListener({
     offsets: [0],
     createListener: () =>
@@ -96,6 +98,9 @@ async function startProvider() {
           expect(typeof output).toBe("string");
           const inventory: Inventory = JSON.parse(output!);
           inventories.push(inventory);
+          if (currentStep === 1) {
+            await firstReply.promise;
+          }
           writeOpenAiResponsesText(response, {
             text: `Verified inventory ${inventories.length}: ${inventory.scope}.`,
             messageId: `inventory-${inventories.length}`,
@@ -117,8 +122,10 @@ async function startProvider() {
     port: owned.claim.port,
     failures,
     inventories,
+    releaseFirstReply: () => firstReply.resolve(),
     close: () =>
       runQaGatewayFixture(async () => {
+        firstReply.resolve();
         owned.listener.closeAllConnections();
         await Promise.allSettled(handlers);
         await owned.releaseListener();
@@ -266,6 +273,8 @@ suite.define(() => {
         };
       });
       await pairControlUiPage(page, (args) => runGatewayCli(instance, args));
+      await page.goto(suite.server.baseUrl + "settings/appearance");
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await waitForControlUiGatewayReady(page);
       const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
@@ -296,7 +305,17 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await composer.fill(freshPrompt);
         await send.click();
-        await completed(1);
+        await expect.poll(() => provider.inventories.length).toBe(1);
+        await composer.fill(onlineQueuedPrompt);
+        await page.getByRole("button", { name: "Queue message", exact: true }).click();
+        await expect
+          .poll(async () =>
+            (await readOutboxQueue(page)).some((item) => item.text === onlineQueuedPrompt),
+          )
+          .toBe(true);
+        expect(sent.some((frame) => frame.params?.message === onlineQueuedPrompt)).toBe(false);
+        provider.releaseFirstReply();
+        await completed(2);
         expect(loadSessionEntryReadOnly(scope)).toMatchObject({
           sessionId: stale.sessionId,
           sessionStartedAt: stale.sessionStartedAt,
@@ -313,6 +332,15 @@ suite.define(() => {
           ]),
         });
         expect(freshSend?.params).toHaveProperty("__controlUiReconnectResume", "fresh");
+        expect(provider.inventories[1]).toMatchObject({
+          scope: "gateway",
+          jobs: expect.arrayContaining([
+            expect.objectContaining({ id: foreignJob.id, name: foreignJobName }),
+          ]),
+        });
+        expect(
+          sent.find((frame) => frame.params?.message === onlineQueuedPrompt)?.params,
+        ).not.toHaveProperty("__controlUiReconnectResume");
 
         await disconnect();
         await composer.fill(queuedPrompt);
@@ -320,13 +348,13 @@ suite.define(() => {
         expect(sent.some((frame) => frame.params?.message === queuedPrompt)).toBe(false);
         reconnectGate.resolve();
         await waitForControlUiGatewayReady(page);
-        await completed(2);
+        await completed(3);
         const queuedSend = sent.find(
           (frame) => frame.method === "chat.send" && frame.params?.message === queuedPrompt,
         );
         expect(queuedSend?.params).toMatchObject({ __controlUiReconnectResume: true });
-        expect(provider.inventories[1]?.scope).toBe("caller");
-        expect(provider.inventories[1]?.jobs).not.toEqual(
+        expect(provider.inventories[2]?.scope).toBe("caller");
+        expect(provider.inventories[2]?.jobs).not.toEqual(
           expect.arrayContaining([expect.objectContaining({ id: foreignJob.id })]),
         );
         // Reload the real document after durable admission, while reconnect is held.
@@ -341,15 +369,15 @@ suite.define(() => {
         await page.reload();
         reconnectGate.resolve();
         await waitForControlUiGatewayReady(page);
-        await completed(3);
+        await completed(4);
         expect(
           sent.find(
             (frame) => frame.method === "chat.send" && frame.params?.message === restoredPrompt,
           )?.params,
         ).toMatchObject({ __controlUiReconnectResume: true });
-        expect(provider.inventories[2]?.scope).toBe("caller");
-        expect(JSON.stringify(provider.inventories[2])).not.toContain(foreignJob.id);
-        expect(JSON.stringify(provider.inventories[2])).not.toContain(foreignJobName);
+        expect(provider.inventories[3]?.scope).toBe("caller");
+        expect(JSON.stringify(provider.inventories[3])).not.toContain(foreignJob.id);
+        expect(JSON.stringify(provider.inventories[3])).not.toContain(foreignJobName);
 
         // Retry an actual Gateway rejection through the visible recovery action.
         await disconnect();
@@ -365,19 +393,20 @@ suite.define(() => {
           });
         const retry = page.getByRole("button", { name: "Retry queued message", exact: true });
         await retry.waitFor();
-        expect(provider.inventories).toHaveLength(3);
+        expect(provider.inventories).toHaveLength(4);
         await retry.click();
-        await completed(4);
+        await completed(5);
         const retrySends = sent.filter(
           (frame) => frame.method === "chat.send" && frame.params?.message === retryPrompt,
         );
         expect(retrySends).toHaveLength(2);
         expect(retrySends[1]?.params).toMatchObject({ __controlUiReconnectResume: true });
-        expect(provider.inventories[3]?.scope).toBe("caller");
-        expect(JSON.stringify(provider.inventories[3])).not.toContain(foreignJob.id);
-        expect(JSON.stringify(provider.inventories[3])).not.toContain(foreignJobName);
+        expect(provider.inventories[4]?.scope).toBe("caller");
+        expect(JSON.stringify(provider.inventories[4])).not.toContain(foreignJob.id);
+        expect(JSON.stringify(provider.inventories[4])).not.toContain(foreignJobName);
         expect(provider.failures).toEqual([]);
       } finally {
+        provider.releaseFirstReply();
         reconnectGate.resolve();
       }
     });

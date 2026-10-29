@@ -55,6 +55,62 @@ describe("fresh input after reconnect", () => {
     },
   );
 
+  it.each(["current", "reconnected", "reloaded"])(
+    "retains online Queue submission authority only in its original document and connection (%s)",
+    async (scenario) => {
+      const sessionId = "queued-session";
+      const active = {
+        key: "agent:main",
+        sessionId,
+        hasActiveRun: true,
+        activeRunIds: ["active-run"],
+        status: "running",
+      };
+      const history = vi.fn().mockResolvedValue({
+        messages: [],
+        sessionId,
+        sessionInfo: active,
+        inFlightRun: { runId: "active-run", text: "Still working." },
+      });
+      const host = makeChatHost({
+        chatMessage: "List my automations when this finishes",
+        chatRunId: "active-run",
+        chatStream: "Still working.",
+        currentSessionId: sessionId,
+        reconnectResumeSessionId: sessionId,
+        requestHandlers: {
+          "chat.history": history,
+          "chat.send": { status: "started" },
+        },
+      });
+      await handleSendChat(host, undefined, { followUpMode: "queue" });
+      await resumeStoredChatOutboxes(host);
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+      expect(host.chatQueue).toMatchObject([{ sendAttempts: 0, sendState: "waiting-idle" }]);
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]).not.toHaveProperty("isFreshSubmission");
+      if (scenario === "reconnected") {
+        host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
+      }
+      host.chatRunId = null;
+      host.chatStream = null;
+      history.mockResolvedValue({
+        messages: [],
+        sessionId,
+        sessionInfo: { ...active, hasActiveRun: false, activeRunIds: [], status: "done" },
+      });
+      let drainHost = host;
+      if (scenario === "reloaded") {
+        reloadChatDocumentStorage([]);
+        drainHost = makeChatHost({ client: host.client, currentSessionId: sessionId });
+      }
+      await resumeStoredChatOutboxes(drainHost);
+      expect(findChatSendPayload(host)).toMatchObject({
+        sessionId,
+        __controlUiReconnectResume: scenario === "current" ? "fresh" : true,
+      });
+    },
+  );
+
   it("does not retain fresh authority across a connection change during preparation", async () => {
     const settings = createDeferred<boolean>();
     const host = makeChatHost({
@@ -110,29 +166,62 @@ describe("fresh input after reconnect", () => {
     expect(findChatSendPayload(source)).toHaveProperty("__controlUiReconnectResume", true);
   });
 
-  it("does not treat an explicit retry of failed input as a fresh submission", async () => {
+  it("keeps failed pre-transport steer retries recovered", async () => {
+    const markdown = await import("../../components/markdown-live-loader.ts");
+    vi.spyOn(markdown, "loadStreamingMarkdown").mockRejectedValueOnce(
+      new Error("Module load failed"),
+    );
     const host = makeChatHost({
-      chatMessage: "Retry this input",
+      chatMessage: "Steer this active turn",
+      chatRunId: "active-run",
       currentSessionId: "reconnected-session",
-      requestHandlers: {
-        "chat.send": { status: "error" },
-        "chat.history": {
-          messages: [],
-          sessionId: "reconnected-session",
-          sessionInfo: { key: "agent:main", hasActiveRun: false, status: "done" },
-        },
-      },
+      reconnectResumeSessionId: "reconnected-session",
+      requestHandlers: { "chat.send": { status: "started" } },
     });
-    await handleSendChat(host);
-    const failed = expectDefined(host.chatQueue[0], "failed input");
-    expect(failed.sendState).toBe("failed");
+    await handleSendChat(host, undefined, { followUpMode: "steer" });
+    const failed = expectDefined(host.chatQueue[0], "failed steer input");
+    expect(failed).toMatchObject({ sendState: "failed", sendAttempts: 0, queueMode: "steer" });
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
 
     await retryQueuedChatMessage(host, failed.id);
 
-    const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
-    expect(sends).toHaveLength(2);
-    expect(sends[1]?.[1]).toHaveProperty("__controlUiReconnectResume", true);
+    expect(findChatSendPayload(host)).toMatchObject({
+      idempotencyKey: failed.sendRunId,
+      __controlUiReconnectResume: true,
+    });
   });
+
+  it.each(["durable", "memory"])(
+    "does not treat an explicit retry of failed %s input as a fresh submission",
+    async (storage) => {
+      if (storage === "memory") {
+        vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        });
+      }
+      const host = makeChatHost({
+        chatMessage: "Retry this input",
+        currentSessionId: "reconnected-session",
+        requestHandlers: {
+          "chat.send": { status: "error" },
+          "chat.history": {
+            messages: [],
+            sessionId: "reconnected-session",
+            sessionInfo: { key: "agent:main", hasActiveRun: false, status: "done" },
+          },
+        },
+      });
+      await handleSendChat(host);
+      const failed = expectDefined(host.chatQueue[0], "failed input");
+      expect(failed.sendState).toBe("failed");
+
+      await retryQueuedChatMessage(host, failed.id);
+
+      const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
+      expect(sends).toHaveLength(2);
+      expect(sends[1]?.[1]).toHaveProperty("__controlUiReconnectResume", true);
+    },
+  );
 });
 
 describe("attachment frame admission", () => {

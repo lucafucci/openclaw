@@ -592,6 +592,7 @@ export async function handleSendChat(
     const admission = captureChatOutboxAdmission(host, host.sessionKey);
     const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser);
     let queued: ChatQueueItem = {
+      isFreshSubmission,
       storageScope: outboxStorageScope(host),
       id: generateUUID(),
       text: intent ? quotedMessage : queuedText.text,
