@@ -13,7 +13,7 @@ jobs:
   proof:
     if: github.repository == 'lucafucci/openclaw'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -30,21 +30,20 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
-      - name: Install exact Gateway and Codex versions in disposable prefix
+      - name: Install exact Gateway in disposable prefix
         run: |
           set -euo pipefail
           cp -R .github/authority-proof/exec-continuation-overlay "$RUNNER_TEMP/exec-continuation-overlay"
           mkdir -p "$RUNNER_TEMP/exec-continuation-overlay/candidates/installation" "$RUNNER_TEMP/exec-continuation-evidence/baseline" "$RUNNER_TEMP/exec-continuation-evidence/candidate"
-          npm install --prefix "$RUNNER_TEMP/exec-continuation-overlay/candidates/installation" --omit=dev --no-audit --no-fund openclaw@2026.10.8 @openclaw/codex@2026.10.8
+          npm install --prefix "$RUNNER_TEMP/exec-continuation-overlay/candidates/installation" --omit=dev --no-audit --no-fund openclaw@2026.10.8
       - name: Reproduce the reported authority failure with native Codex
         id: baseline
         run: |
           set -euo pipefail
           set +e
-          timeout --signal=TERM --kill-after=10s 300s node .github/authority-proof/exec-continuation-codex-proof.mts \
+          timeout --signal=TERM --kill-after=10s 600s node .github/authority-proof/exec-continuation-codex-proof.mts \
             "$RUNNER_TEMP/exec-continuation-evidence/baseline" \
             "$RUNNER_TEMP/exec-continuation-overlay/candidates/installation/node_modules/openclaw" \
-            "$RUNNER_TEMP/exec-continuation-overlay/candidates/installation/node_modules/@openclaw/codex" \
             2>&1 | tee "$RUNNER_TEMP/exec-continuation-evidence/baseline/proof.log"
           result=${PIPESTATUS[0]}
           set -e
@@ -66,10 +65,9 @@ jobs:
       - name: Require the same native Codex continuation to succeed
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=10s 300s node .github/authority-proof/exec-continuation-codex-proof.mts \
+          timeout --signal=TERM --kill-after=10s 600s node .github/authority-proof/exec-continuation-codex-proof.mts \
             "$RUNNER_TEMP/exec-continuation-evidence/candidate" \
             "$RUNNER_TEMP/exec-continuation-overlay/candidates/installation/node_modules/openclaw" \
-            "$RUNNER_TEMP/exec-continuation-overlay/candidates/installation/node_modules/@openclaw/codex" \
             2>&1 | tee "$RUNNER_TEMP/exec-continuation-evidence/candidate/proof.log"
       - name: Upload bounded synthetic evidence only
         if: always()
@@ -80,5 +78,6 @@ jobs:
             ${{ runner.temp }}/exec-continuation-evidence/*/result.json
             ${{ runner.temp }}/exec-continuation-evidence/*/proof.log
             ${{ runner.temp }}/exec-continuation-evidence/*/native-tool-catalog.json
+            ${{ runner.temp }}/exec-continuation-evidence/*/plugin-install-result.json
           retention-days: 7
           if-no-files-found: warn

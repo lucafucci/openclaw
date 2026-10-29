@@ -21,14 +21,6 @@ async function readSyntheticDiagnostics() {
 async function main() {
   const output = path.resolve(process.argv[2]);
   const runtime = path.resolve(process.argv[3]);
-  const codexPlugin = await fs.realpath(path.resolve(process.argv[4]));
-  const codexPackage = JSON.parse(await fs.readFile(path.join(codexPlugin, "package.json"), "utf8"));
-  assert.equal(codexPackage.name, "@openclaw/codex");
-  assert.equal(codexPackage.version, "2026.10.8");
-  const nativeRoot = path.resolve(codexPlugin, "../../@openai/codex");
-  const nativePackage = JSON.parse(await fs.readFile(path.join(nativeRoot, "package.json"), "utf8"));
-  assert.equal(nativePackage.version, "0.160.0");
-  const codexLauncher = await fs.realpath(path.join(nativeRoot, "bin/codex.js"));
   await fs.mkdir(output, { recursive: true });
   const packageInfo = JSON.parse(await fs.readFile(path.join(runtime, "package.json"), "utf8"));
   assert.equal(packageInfo.version, "2026.10.8", "proof chunk exports are pinned to this package");
@@ -41,6 +33,87 @@ async function main() {
   // Client credentials also belong to this disposable proof, never the operator's state.
   process.env.OPENCLAW_STATE_DIR = state;
   process.env.OPENCLAW_CONFIG_PATH = configPath;
+  // The production installer owns package provenance, capability acceptance and
+  // the persisted plugin index. A load.paths entry has config origin, not global.
+  const installEnv = {
+    PATH: process.env.PATH,
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_HOME: path.join(home, ".codex"),
+    LANG: "C.UTF-8",
+    OPENCLAW_STATE_DIR: state,
+    OPENCLAW_CONFIG_PATH: configPath,
+  };
+  await fs.writeFile(configPath, JSON.stringify({
+    gateway: { mode: "local" },
+    update: { checkOnStart: false },
+    plugins: { allow: ["openai"], slots: { memory: "none" } },
+  }), { mode: 0o600 });
+  const installDiagnostics: Array<Record<string, unknown>> = [];
+  async function runPluginCli(args: string[], timeoutMs: number): Promise<string> {
+    const startedAt = Date.now();
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let overflow = false;
+    const child = spawn(process.execPath, ["dist/index.js", "plugins", ...args], {
+      cwd: runtime, env: installEnv, stdio: ["ignore", "pipe", "pipe"], detached: true,
+    });
+    const killGroup = () => {
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      }
+    };
+    const timer = setTimeout(() => { timedOut = true; killGroup(); }, timeoutMs);
+    const maxOutput = 4 * 1024 * 1024;
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (stdout.length > maxOutput) { overflow = true; stdout = stdout.slice(0, maxOutput); killGroup(); }
+    });
+    child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-65536); });
+    let spawnError: Error | undefined;
+    child.once("error", (error) => { spawnError = error; });
+    const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
+    clearTimeout(timer);
+    const diagnosticLines = `${stdout}\n${stderr}`.split("\n")
+      .filter((line) => /error|fail|warn|installed|download|codex|capabilit/i.test(line))
+      .filter((line) => !/token|credential|authorization|private.key/i.test(line))
+      .slice(-20).map((line) => line.replace(/\u001b\[[0-9;]*m/g, "").slice(0, 1200));
+    installDiagnostics.push({ command: args[0], code, timedOut, overflow,
+      durationMs: Date.now() - startedAt, errorType: spawnError?.name,
+      diagnosticLines: args[0] === "list" && code === 0 ? [] : diagnosticLines });
+    await fs.writeFile(path.join(output, "plugin-install-result.json"), JSON.stringify(installDiagnostics, null, 2));
+    assert.equal(spawnError, undefined, "plugin CLI failed to start");
+    assert.equal(timedOut, false, "plugin CLI deadline exceeded");
+    assert.equal(overflow, false, "plugin CLI output exceeded the fixture bound");
+    assert.equal(code, 0, "plugin CLI failed; inspect plugin-install-result.json");
+    return stdout;
+  }
+  stage = "official-codex-plugin-install";
+  await runPluginCli(["install", "npm:@openclaw/codex@2026.10.8", "--pin", "--accept-capabilities"], 240000);
+  stage = "official-codex-plugin-discovery";
+  const inventory = JSON.parse(await runPluginCli(["list", "--json"], 60000));
+  const installed = inventory.plugins.filter((entry: { id?: string }) => entry.id === "codex");
+  assert.equal(installed.length, 1, "exactly one managed Codex plugin must be discovered");
+  const plugin = installed[0];
+  assert.equal(plugin.origin, "global");
+  assert.equal(plugin.packageName, "@openclaw/codex");
+  assert.equal(plugin.version, "2026.10.8");
+  assert.equal(typeof plugin.rootDir, "string");
+  const codexPlugin = await fs.realpath(plugin.rootDir);
+  const relativePluginPath = path.relative(await fs.realpath(state), codexPlugin);
+  assert.ok(relativePluginPath && relativePluginPath !== ".." && !relativePluginPath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePluginPath), "installed plugin must remain inside disposable state");
+  const installedConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
+  assert.equal(installedConfig.plugins?.load?.paths?.length ?? 0, 0, "managed plugin discovery must not use load.paths");
+  const codexPackage = JSON.parse(await fs.readFile(path.join(codexPlugin, "package.json"), "utf8"));
+  assert.equal(codexPackage.name, "@openclaw/codex");
+  assert.equal(codexPackage.version, "2026.10.8");
+  const nativeRoot = path.resolve(codexPlugin, "../../@openai/codex");
+  const nativePackage = JSON.parse(await fs.readFile(path.join(nativeRoot, "package.json"), "utf8"));
+  assert.equal(nativePackage.version, "0.160.0");
+  const codexLauncher = await fs.realpath(path.join(nativeRoot, "bin/codex.js"));
   const { t: GatewayClient } = await import(
     pathToFileURL(path.join(runtime, "dist/client-BpcH-Scn.mjs")).href
   );
@@ -136,13 +209,14 @@ async function main() {
   await new Promise<void>((resolve) => reservation.listen(0, "127.0.0.1", resolve));
   const port = (reservation.address() as AddressInfo).port;
   await new Promise<void>((resolve) => reservation.close(() => resolve()));
-  const config = createOpenAiResponsesModelConfig({
+  const modelConfig = createOpenAiResponsesModelConfig({
     baseUrl: `http://127.0.0.1:${providerPort}`,
     providerId: "runtime-proof",
     modelId: "operator",
     reasoning: false,
     toolProfile: "full",
   });
+  const config = { ...installedConfig, ...modelConfig };
   // Native Codex admits the official OpenAI provider. Only its app-server transport
   // is redirected to the synthetic loopback server, following the upstream fixture.
   config.agents.defaults.workspace = workspace;
@@ -170,13 +244,16 @@ async function main() {
   config.logging = { level: "debug", consoleLevel: "debug" };
   config.update = { checkOnStart: false };
   config.plugins = {
-    allow: ["openai", "codex"],
-    load: { paths: [codexPlugin] },
-    slots: { memory: "none" },
+    ...installedConfig.plugins,
+    allow: [...new Set([...(installedConfig.plugins?.allow ?? []), "openai", "codex"])],
+    slots: { ...installedConfig.plugins?.slots, memory: "none" },
     entries: {
+      ...installedConfig.plugins?.entries,
       codex: {
+        ...installedConfig.plugins?.entries?.codex,
         enabled: true,
         config: {
+          ...installedConfig.plugins?.entries?.codex?.config,
           codexDynamicToolsLoading: "direct",
           sessionCatalog: { enabled: false },
           appServer: {
