@@ -1,0 +1,185 @@
+--- a/src/agents/bash-tools.exec-notify.ts
++++ b/src/agents/bash-tools.exec-notify.ts
+@@ -17,6 +17,7 @@
+   compactNotifyOutput,
+   renderExecExitLabel,
+ } from "./bash-tools.exec-output.js";
++import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+ 
+ const DEFAULT_NOTIFY_TAIL_CHARS = 400;
+ 
+@@ -38,7 +39,9 @@
+   if (!owner) {
+     return undefined;
+   }
+-  return captureSessionEventTarget(owner, targetKey).then(
++  return captureSessionEventTarget(owner, targetKey, {
++    operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
++  }).then(
+     (target) => {
+       session.notifySessionTarget = target;
+     },
+--- a/src/auto-reply/reply/session-event-handoff.ts
++++ b/src/auto-reply/reply/session-event-handoff.ts
+@@ -47,6 +47,7 @@
+   getSessionEventRuntimeConfig,
+   prepareSessionEventTargetForHost,
+   readSessionEventTargetEnvironment,
++  readSessionEventTargetOperatorAuthority,
+   resolveSessionEventKey,
+ } from "./session-event-target.js";
+ export {
+@@ -101,6 +102,10 @@
+   acceptanceAssertion?.();
+   options.assertCurrent?.();
+   options.expectedTarget?.assertCurrent?.();
++  const operatorAuthority = options.expectedTarget
++    ? readSessionEventTargetOperatorAuthority(options.expectedTarget)
++    : undefined;
++  operatorAuthority?.assertCurrent();
+   // The policy snapshot this occurrence was admitted under. A policy publication rejects
+   // admission; an accepted occurrence that never started is re-admitted under the current
+   // policy at settlement instead of being destroyed (see finish).
+@@ -144,9 +149,11 @@
+       ]
+     : readExecRequestOwners(options);
+   const requestSignal = execRequestAbortSignal(execRequestOwners, options.abortSignal);
+-  const signal = requestSignal
+-    ? AbortSignal.any([requestSignal, controller.signal])
+-    : controller.signal;
++  const signal = AbortSignal.any(
++    [requestSignal, controller.signal, operatorAuthority?.signal].filter(
++      (value): value is AbortSignal => Boolean(value),
++    ),
++  );
+   signal.throwIfAborted();
+   if (options.preserveOccurrenceOnRejection && !options.occurrences?.length) {
+     throw new Error("Preserving a rejected event requires its original queued occurrence");
+@@ -192,6 +199,14 @@
+   );
+   if (!ownership) {
+     throw new Error("Session event occurrence no longer available for admission");
++  }
++  let releaseOperatorAuthority: (() => void) | undefined;
++  try {
++    // Transfer custody before the completed process releases its original source.
++    releaseOperatorAuthority = operatorAuthority?.retain?.();
++  } catch (error) {
++    ownership.cancel();
++    throw error;
+   }
+   const { promise: settled, resolve } = createDeferredCore<SessionEventOutcome>();
+   const acceptance = createDeferredCore<Awaited<SessionEventReceipt["accepted"]>>();
+@@ -228,6 +243,7 @@
+       throw new Error("Session event occurrence is settled");
+     }
+     signal.throwIfAborted();
++    operatorAuthority?.assertCurrent();
+     if (!accepted) {
+       acceptanceAssertion?.();
+     }
+@@ -408,6 +424,8 @@
+           });
+         }
+       }
++      releaseOperatorAuthority?.();
++      releaseOperatorAuthority = undefined;
+       if (!accepted) {
+         // A producer waiting on acceptance observes the re-admission's acceptance
+         // outcome, not the stale rejection that triggered it.
+@@ -565,6 +583,7 @@
+           },
+         },
+         replyOptions: {
++          operatorAuthority,
+           admittedSessionSettings: settings,
+           toolsAllow,
+           onDeliberateSilentTerminalReply: () => {
+--- a/src/auto-reply/reply/session-event-target.ts
++++ b/src/auto-reply/reply/session-event-target.ts
+@@ -1,4 +1,8 @@
+ /** Captured destination identity and live generation facts for ordinary session events. */
++import {
++  assertAdmittedRunOperatorAuthority,
++  type AdmittedRunOperatorAuthority,
++} from "../../agents/admitted-run-context.js";
+ import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+ import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
+ import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
+@@ -57,7 +61,14 @@
+ const targetScopes = resolveGlobalSingleton(
+   Symbol.for("openclaw.sessionEvents.targetScopes"),
+   () =>
+-    new WeakMap<SessionEventTarget, { env?: NodeJS.ProcessEnv; source?: CapturedEventSource }>(),
++    new WeakMap<
++      SessionEventTarget,
++      {
++        env?: NodeJS.ProcessEnv;
++        source?: CapturedEventSource;
++        operatorAuthority?: AdmittedRunOperatorAuthority;
++      }
++    >(),
+ );
+ 
+ export function getSessionEventRuntimeConfig() {
+@@ -98,8 +109,15 @@
+     assertCaptureCurrent?: () => void;
+     /** Prepared host policy survives adapters that translate or clear the original tool cap. */
+     producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
++    /** Original host-issued source; the producer owns its lifetime until enqueue. */
++    operatorAuthority?: AdmittedRunOperatorAuthority;
+   } = {},
+ ): Promise<SessionEventTarget> {
++  const operatorAuthority = options.operatorAuthority;
++  if (operatorAuthority) {
++    assertAdmittedRunOperatorAuthority(operatorAuthority);
++    operatorAuthority.assertCurrent();
++  }
+   options.assertCaptureCurrent?.();
+   options.assertCurrent?.();
+   const agentId = normalizeAgentId(requestedAgentId);
+@@ -127,6 +145,7 @@
+       ? await prepareGatewayToolCallerAssertion()
+       : undefined;
+   const assertCaptureCurrent = () => {
++    operatorAuthority?.assertCurrent();
+     options.assertCaptureCurrent?.();
+     options.assertCurrent?.();
+     assertAgentRunLifecycleGenerationCurrent(generation);
+@@ -221,7 +240,7 @@
+           : destinationSettings,
+       ),
+     };
+-    targetScopes.set(target, { env, source });
++    targetScopes.set(target, { env, source, operatorAuthority });
+     return target;
+   } finally {
+     preparedCaller?.release();
+@@ -381,6 +400,12 @@
+   return targetScopes.get(target)?.env;
+ }
+ 
++export function readSessionEventTargetOperatorAuthority(
++  target: SessionEventTarget,
++): AdmittedRunOperatorAuthority | undefined {
++  return targetScopes.get(target)?.operatorAuthority;
++}
++
+ /** Coalesced work retains every producer's original destination and permission bound. */
+ export function combineSessionEventTargetsForHost(
+   targets: readonly SessionEventTarget[],
+@@ -400,9 +425,13 @@
+       target.lifecycleRevision !== first.lifecycleRevision ||
+       target.generation !== first.generation ||
+       target.chatType !== first.chatType ||
++      readSessionEventTargetOperatorAuthority(target) !==
++        readSessionEventTargetOperatorAuthority(first) ||
+       channelRouteDedupeKey(target.deliveryContext) !== route
+     ) {
+-      throw new Error("Session event batch has different captured destinations");
++      throw new Error(
++        "Session event batch has different captured destinations or requester authority",
++      );
+     }
+   }
+   const assertCurrent = () => {
