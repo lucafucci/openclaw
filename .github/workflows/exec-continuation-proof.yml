@@ -1,0 +1,48 @@
+name: Background exec continuation proof
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  proof:
+    if: github.repository == 'lucafucci/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      PROOF_WORKFLOW_REVISION: ${{ github.sha }}
+    steps:
+      - name: Checkout immutable proof helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Setup pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+      - name: Install exact published runtime in disposable prefix
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/exec-continuation-runtime" "$RUNNER_TEMP/exec-continuation-evidence"
+          npm install --prefix "$RUNNER_TEMP/exec-continuation-runtime" --omit=dev --no-audit --no-fund openclaw@2026.10.8
+      - name: Run real Gateway and background process with synthetic inference
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 300s node .github/authority-proof/exec-continuation-proof.mts \
+            "$RUNNER_TEMP/exec-continuation-evidence" \
+            "$RUNNER_TEMP/exec-continuation-runtime/node_modules/openclaw" \
+            2>&1 | tee "$RUNNER_TEMP/exec-continuation-evidence/proof.log"
+      - name: Upload bounded synthetic evidence only
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: exec-continuation-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/exec-continuation-evidence/result.json
+            ${{ runner.temp }}/exec-continuation-evidence/proof.log
+          retention-days: 7
+          if-no-files-found: warn
