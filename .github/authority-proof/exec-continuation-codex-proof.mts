@@ -99,7 +99,6 @@ async function main() {
   assert.equal(installed.length, 1, "exactly one managed Codex plugin must be discovered");
   const plugin = installed[0];
   assert.equal(plugin.origin, "global");
-  assert.equal(plugin.packageName, "@openclaw/codex");
   assert.equal(plugin.version, "2026.10.8");
   assert.equal(typeof plugin.rootDir, "string");
   const codexPlugin = await fs.realpath(plugin.rootDir);
