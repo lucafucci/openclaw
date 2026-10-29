@@ -1,6 +1,11 @@
 name: Background exec continuation proof
 on:
   workflow_dispatch:
+  push:
+    branches: [proof/automation-authority]
+    paths:
+      - .github/workflows/exec-continuation-proof.yml
+      - .github/authority-proof/exec-continuation-*.mts
 permissions:
   contents: read
 jobs:
