@@ -10,6 +10,10 @@ on:
         description: Exact upstream base, full 40-character commit SHA
         required: true
         type: string
+      queue_fixture_repair:
+        description: Rerun changed Queue fixtures; verify other files match the previously tested candidate
+        default: false
+        type: boolean
 permissions:
   contents: read
 jobs:
@@ -24,6 +28,7 @@ jobs:
       PROOF_REVISION: ${{ inputs.revision }}
       PROOF_BASE: ${{ inputs.base }}
       PROOF_QUEUE_BASE: 436ef3edba92532ebd95114bbcc0a5a0fa1f5aa5
+      PROOF_PREVIOUS_CANDIDATE: 29377c732fbe8e8ff7624594e3328e7a955c021a
       OPENCLAW_VITEST_RUNTIME: node
       OPENCLAW_VITEST_MAX_WORKERS: "1"
       NODE_OPTIONS: --max-old-space-size=6144
@@ -74,6 +79,16 @@ jobs:
           printf '%s\n' "$PROOF_REVISION" > "$PROOF_OUTPUT/revision.txt"
           printf '%s\n' "$PROOF_BASE" > "$PROOF_OUTPUT/base.txt"
           printf '%s\n' "$PROOF_QUEUE_BASE" > "$PROOF_OUTPUT/queue-base.txt"
+      - name: Verify reuse of unchanged production and sibling proofs
+        if: ${{ inputs.queue_fixture_repair }}
+        run: |
+          set -euo pipefail
+          [[ "$PROOF_BASE" == 1c3220a667d74193ce9738baf87681298daf3143 ]]
+          git fetch --no-tags --depth=1 https://github.com/lucafucci/openclaw.git "$PROOF_PREVIOUS_CANDIDATE"
+          git diff --exit-code "$PROOF_PREVIOUS_CANDIDATE" "$PROOF_REVISION" -- . \
+            ':!ui/src/pages/chat/chat-send-submit.test.ts' \
+            ':!ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts'
+          printf '%s\n' 'Reuse only successful unchanged sibling checks from https://github.com/lucafucci/openclaw/actions/runs/40907831199; failed Queue fixtures and real-browser flow must pass again here.' > "$PROOF_OUTPUT/reused-evidence.txt"
       - name: Setup pinned toolchain and dependencies
         id: setup
         uses: ./.github/actions/setup-node-env
@@ -111,7 +126,7 @@ jobs:
         run: |
           pnpm --dir ui test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts src/pages/chat/chat-send.test.ts src/pages/chat/chat-outbox-transient-recovery.test.ts src/pages/chat/chat-outbox-recovery-scope.test.ts src/pages/activity/activity-page.test.ts 2>&1 | tee "$PROOF_OUTPUT/focused.log"
       - name: Base-red fresh-input regressions and negative controls
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && !inputs.queue_fixture_repair }}
         run: |
           bash "$PROOF_HELPERS/browser-base-red.sh" "$PROOF_OUTPUT" "$PROOF_BASE" 2>&1 | tee "$PROOF_OUTPUT/base-red.log"
       - name: Queue regression against previous PR production
@@ -129,11 +144,11 @@ jobs:
         run: |
           node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium 2>&1 | tee "$PROOF_OUTPUT/chromium.log"
       - name: Gateway reconnect normalization and queued recovery
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && !inputs.queue_fixture_repair }}
         run: |
           node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/chat-send-request.test.ts src/gateway/server.chat-dashboard-title-rollover.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/gateway-recovery.log"
       - name: Corrected upstream browser scenarios
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' && !inputs.queue_fixture_repair }}
         run: |
           node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-header-subagents.e2e.test.ts ui/src/e2e/chat-boot-optional-requests.e2e.test.ts ui/src/e2e/chat-outbox-payloads.e2e.test.ts ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts ui/src/e2e/new-session-page.transition.e2e.test.ts ui/src/e2e/new-session-page.prompt-attachments.e2e.test.ts ui/src/e2e/command-palette-drop.e2e.test.ts ui/src/e2e/theme-surfaces.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/upstream-browser.log"
       - name: Reconnect automation browser flow against the real Gateway
@@ -141,7 +156,7 @@ jobs:
         run: |
           node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e-prebuilt.config.ts --configLoader runner ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/reconnect-browser.log"
       - name: Compiled Gateway authority, persistence, and revocation
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && !inputs.queue_fixture_repair }}
         run: |
           node --import ./scripts/tsx.mjs "$PROOF_HELPERS/browser-runtime-proof.mts" "$PROOF_OUTPUT" 2>&1 | tee "$PROOF_OUTPUT/runtime.log"
       - name: Upload exact-revision evidence
