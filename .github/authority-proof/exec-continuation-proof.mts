@@ -127,12 +127,13 @@ async function main() {
   config.models.catalogRefresh = { enabled: false };
   config.agents.entries = { main: {} };
   config.tools = {
-    allow: ["exec"],
+    allow: ["exec", "process"],
     codeMode: false,
     toolSearch: false,
     exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: true },
   };
   config.cron = { enabled: false };
+  config.logging = { level: "debug", consoleLevel: "debug" };
   config.update = { checkOnStart: false };
   config.plugins = { allow: ["openai"], slots: { memory: "none" } };
   config.gateway = {
@@ -275,10 +276,11 @@ async function main() {
       { timeoutMs: 65000 },
     );
     console.log("FIRST_TURN", JSON.stringify({ status: first.status, calls }));
+    console.log("SYNTHETIC_TOOL_RESULTS", JSON.stringify(outputs.map((value) => value.slice(0, 4000))));
     assert.equal(first.status, "ok");
     assert.equal(calls, 2, "first turn must start a background command and finish");
     assert.ok(
-      outputs.some((x) => x.includes("running")),
+      outputs.some((x) => x.includes("Command still running (session ")),
       "command must actually be backgrounded",
     );
     stage = "background-exec-continuation";
