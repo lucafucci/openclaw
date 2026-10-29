@@ -11,6 +11,13 @@ import { pathToFileURL } from "node:url";
 
 const reportOutput = path.resolve(process.argv[2]);
 let stage = "load-runtime";
+async function readSyntheticDiagnostics() {
+  const log = await fs.readFile(path.join(reportOutput, "gateway-runtime.log"), "utf8").catch(() => "");
+  return log.split("\n")
+    .filter((line) => /error|failed|unavailable|harness|session event|exec:/i.test(line))
+    .filter((line) => !/credential|private.key/i.test(line))
+    .slice(-30).map((line) => line.replace(/\u001b\[[0-9;]*m/g, "").slice(0, 1800));
+}
 async function main() {
   const output = path.resolve(process.argv[2]);
   const runtime = path.resolve(process.argv[3]);
@@ -329,7 +336,7 @@ async function main() {
       { runId: started.runId, timeoutMs: 60000 },
       { timeoutMs: 65000 },
     );
-    console.log("FIRST_TURN", JSON.stringify({ status: first.status, calls }));
+    console.log("FIRST_TURN", JSON.stringify({ status: first.status, error: first.error, calls }));
     console.log("SYNTHETIC_TOOL_RESULTS", JSON.stringify(outputs.map((value) => value.slice(0, 4000))));
     assert.equal(first.status, "ok");
     assert.equal(calls, 2, "first turn must start a background command and finish");
@@ -412,6 +419,8 @@ try {
           assertion:
             error instanceof assert.AssertionError ? error.message.split("\n")[0] : undefined,
           errorType: error instanceof Error ? error.name : "UnknownError",
+          errorMessage: error instanceof Error ? error.message.slice(0, 1800) : undefined,
+          diagnosticLines: await readSyntheticDiagnostics(),
           workflowRevision: process.env.PROOF_WORKFLOW_REVISION,
           nodeVersion: process.version,
         },
