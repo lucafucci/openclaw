@@ -292,6 +292,14 @@ async function main() {
       if (failure || calls >= 4) break;
       await delay(250);
     }
+    // This Gateway uses only the synthetic fixture. Keep diagnostic events bounded,
+    // excluding configuration, handshake and credential records from the artifact.
+    const diagnosticLines = (await fs.readFile(path.join(output, "gateway-runtime.log"), "utf8"))
+      .split("\n")
+      .filter((line) => /session event|exec:|lane task error|embedded run|harness|BACKGROUND_FINISHED|cancel/i.test(line))
+      .filter((line) => !/token|credential|authorization|private.key|https?:\/\//i.test(line))
+      .slice(-40)
+      .map((line) => line.replace(/\u001b\[[0-9;]*m/g, "").slice(0, 1500));
     const summary = {
       stage,
       packageVersion: packageInfo.version,
@@ -300,6 +308,7 @@ async function main() {
       calls,
       failure,
       checks,
+      diagnosticLines,
       resumed: outputs.some((x) => x.includes("RESUME_TOOL_OK")),
       inference: "synthetic; compiled Gateway and process real",
     };
