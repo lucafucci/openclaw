@@ -1,4 +1,8 @@
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
 import type {
   ChatSendIntent,
   QueueMode,
@@ -62,6 +66,13 @@ export async function requestChatSend(
     throw new Error(t("chat.providerReview.pausedBody"));
   }
   const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
+  const clientInfo = state.client?.clientInfo;
+  // Embedded native apps retain their accepted boolean reconnect envelope.
+  const freshBrowserInput =
+    params.isFreshSubmission &&
+    clientInfo?.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
+    (clientInfo.mode === GATEWAY_CLIENT_MODES.UI ||
+      clientInfo.mode === GATEWAY_CLIENT_MODES.WEBCHAT);
   const controlUiReconnectResume = Boolean(
     !params.intent &&
     sessionId &&
@@ -88,7 +99,7 @@ export async function requestChatSend(
           : {}),
         ...(sessionId ? { sessionId } : {}),
         ...(controlUiReconnectResume
-          ? { __controlUiReconnectResume: params.isFreshSubmission ? "fresh" : true }
+          ? { __controlUiReconnectResume: freshBrowserInput ? "fresh" : true }
           : {}),
         message: params.message,
         ...(params.workContext ? { workContext: params.workContext } : {}),

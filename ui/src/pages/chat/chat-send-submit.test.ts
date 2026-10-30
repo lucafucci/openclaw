@@ -101,7 +101,7 @@ describe("fresh input after reconnect", () => {
         sessionId,
         sessionInfo: { ...active, hasActiveRun: false, activeRunIds: [], status: "done" },
       });
-      let drainHost = host;
+      let drainHost: ChatHost = host;
       if (scenario === "reloaded") {
         unsubscribe();
         reloadChatDocumentStorage([]);
