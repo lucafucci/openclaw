@@ -104,7 +104,7 @@ jobs:
       - name: Focused formatting
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
-          pnpm exec oxfmt --check ui/src/pages/chat/chat-send-actions.ts ui/src/lib/chat/chat-types.ts ui/src/pages/chat/chat-outbox-owner.projection.ts src/gateway/server-methods/chat-server-timing.ts src/gateway/server-methods/chat-send-request.ts src/gateway/server-methods/chat-send-input-dispatch.ts src/gateway/server-methods/chat-send-request.test.ts ui/src/pages/chat/chat-outbox-recovery-scope.test.ts ui/src/e2e/chat-outbox-payloads.e2e.test.ts ui/src/pages/chat/chat-outbox-drain.ts ui/src/pages/chat/chat-send-delivery.runtime.ts ui/src/pages/chat/chat-send-detached-command.ts ui/src/pages/chat/chat-send-eligibility.ts ui/src/pages/chat/chat-send-request.ts ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-submit.test.ts ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts test/vitest/vitest.ui-e2e.config.ts test/vitest/vitest.ui-paths.mjs test/vitest-ui-e2e-config.test.ts 2>&1 | tee "$PROOF_OUTPUT/format.log"
+          pnpm exec oxfmt --check ui/src/pages/chat/chat-send-actions.ts ui/src/lib/chat/chat-types.ts ui/src/pages/chat/chat-outbox-owner.projection.ts src/gateway/server-methods/chat-server-timing.ts src/gateway/server-methods/chat-send-request.ts src/gateway/server-methods/chat-send-input-dispatch.ts src/gateway/server-methods/chat-send-request.test.ts ui/src/pages/chat/chat-outbox-recovery-scope.test.ts ui/src/e2e/chat-outbox-payloads.e2e.test.ts ui/src/pages/chat/chat-outbox-drain.ts ui/src/pages/chat/chat-send-delivery.runtime.ts ui/src/pages/chat/chat-send-detached-command.ts ui/src/pages/chat/chat-send-eligibility.ts ui/src/pages/chat/chat-send-request.ts ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-submit.test.ts ui/src/pages/chat/chat-send-deadline.test.ts ui/src/pages/chat/chat-send-native-reconnect.test.ts ui/src/api/gateway.ts ui/src/test-helpers/gateway-client.ts ui/src/e2e/chat-reconnect-automations.real-gateway.e2e.test.ts test/vitest/vitest.ui-e2e.config.ts test/vitest/vitest.ui-paths.mjs test/vitest-ui-e2e-config.test.ts 2>&1 | tee "$PROOF_OUTPUT/format.log"
       - name: E2E ownership contracts
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
@@ -112,7 +112,7 @@ jobs:
       - name: Focused source and repaired upstream lint
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
-          pnpm exec oxlint ui/src/pages/chat/chat-send-actions.ts ui/src/lib/chat/chat-types.ts ui/src/pages/chat/chat-outbox-owner.projection.ts ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-delivery.runtime.ts src/gateway/server-methods/chat-server-timing.ts src/gateway/server-methods/chat-send-request.ts src/gateway/server-methods/chat-send-input-dispatch.ts ui/src/pages/chat/chat-send-request.ts ui/src/pages/new-session/draft-body.browser.test.tsx ui/src/pages/chat/chat-content-column.browser.test.tsx 2>&1 | tee "$PROOF_OUTPUT/lint.log"
+          pnpm exec oxlint ui/src/pages/chat/chat-send-actions.ts ui/src/lib/chat/chat-types.ts ui/src/pages/chat/chat-outbox-owner.projection.ts ui/src/pages/chat/chat-send-submit.ts ui/src/pages/chat/chat-send-delivery.runtime.ts src/gateway/server-methods/chat-server-timing.ts src/gateway/server-methods/chat-send-request.ts src/gateway/server-methods/chat-send-input-dispatch.ts ui/src/pages/chat/chat-send-request.ts ui/src/api/gateway.ts ui/src/test-helpers/gateway-client.ts ui/src/pages/chat/chat-send-submit.test.ts ui/src/pages/chat/chat-send-deadline.test.ts ui/src/pages/chat/chat-send-native-reconnect.test.ts ui/src/pages/new-session/draft-body.browser.test.tsx ui/src/pages/chat/chat-content-column.browser.test.tsx 2>&1 | tee "$PROOF_OUTPUT/lint.log"
       - name: Test-line ratchet against exact base
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
@@ -121,10 +121,14 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           pnpm check:max-lines-ratchet --base "$PROOF_BASE" --no-merge-base 2>&1 | tee "$PROOF_OUTPUT/max-lines.log"
+      - name: Chat UI type contracts
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.ui-chat.json --pretty false 2>&1 | tee "$PROOF_OUTPUT/ui-chat-types.log"
       - name: Focused chat recovery suites
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
-          pnpm --dir ui test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts src/pages/chat/chat-send.test.ts src/pages/chat/chat-outbox-transient-recovery.test.ts src/pages/chat/chat-outbox-recovery-scope.test.ts src/pages/activity/activity-page.test.ts 2>&1 | tee "$PROOF_OUTPUT/focused.log"
+          pnpm --dir ui test --maxWorkers=1 src/pages/chat/chat-send-submit.test.ts src/pages/chat/chat-send-deadline.test.ts src/pages/chat/chat-send-native-reconnect.test.ts src/pages/chat/chat-send.test.ts src/pages/chat/chat-outbox-transient-recovery.test.ts src/pages/chat/chat-outbox-recovery-scope.test.ts src/pages/activity/activity-page.test.ts 2>&1 | tee "$PROOF_OUTPUT/focused.log"
       - name: Base-red fresh-input regressions and negative controls
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && !inputs.queue_fixture_repair }}
         run: |
@@ -143,6 +147,10 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium 2>&1 | tee "$PROOF_OUTPUT/chromium.log"
+      - name: Review panel layout regression
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        run: |
+          node scripts/run-vitest.mjs run --config ui/vitest.config.ts ui/src/pages/chat/components/session-diff-panel.browser.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/review-layout.log"
       - name: Gateway reconnect normalization and queued recovery
         if: ${{ !cancelled() && steps.build.outcome == 'success' && !inputs.queue_fixture_repair }}
         run: |
@@ -171,6 +179,8 @@ jobs:
             ${{ runner.temp }}/authority-proof-evidence/test-lines.log
             ${{ runner.temp }}/authority-proof-evidence/max-lines.log
             ${{ runner.temp }}/authority-proof-evidence/focused.log
+            ${{ runner.temp }}/authority-proof-evidence/ui-chat-types.log
+            ${{ runner.temp }}/authority-proof-evidence/review-layout.log
             ${{ runner.temp }}/authority-proof-evidence/gateway-recovery.log
             ${{ runner.temp }}/authority-proof-evidence/base-red.log
             ${{ runner.temp }}/authority-proof-evidence/base-red-vitest.json

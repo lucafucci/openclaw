@@ -1,0 +1,176 @@
+name: Android automation authority proof
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Android PR candidate, full 40-character commit SHA
+        required: true
+        type: string
+      base:
+        description: Exact integrated upstream base, full 40-character commit SHA
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  proof:
+    if: github.repository == 'lucafucci/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      PROOF_REVISION: ${{ inputs.revision }}
+      PROOF_BASE: ${{ inputs.base }}
+      OPENCLAW_VITEST_RUNTIME: node
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+      NODE_OPTIONS: --max-old-space-size=6144
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
+    steps:
+      - name: Validate immutable input revisions
+        run: |
+          set -euo pipefail
+          [[ "$PROOF_REVISION" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PROOF_BASE" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PROOF_REVISION" != "$PROOF_BASE" ]]
+      - name: Checkout workflow-owned proof helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Preserve helper outside candidate checkout
+        run: |
+          set -euo pipefail
+          PROOF_HELPERS="$RUNNER_TEMP/android-authority-helpers"
+          PROOF_OUTPUT="$RUNNER_TEMP/android-authority-evidence"
+          mkdir -p "$PROOF_HELPERS" "$PROOF_OUTPUT"
+          cp .github/authority-proof/android-runtime-proof.mts "$PROOF_HELPERS/"
+          echo "PROOF_HELPERS=$PROOF_HELPERS" >> "$GITHUB_ENV"
+          echo "PROOF_OUTPUT=$PROOF_OUTPUT" >> "$GITHUB_ENV"
+          git rev-parse HEAD > "$PROOF_OUTPUT/workflow-revision.txt"
+          sha256sum "$PROOF_HELPERS/android-runtime-proof.mts" | cut -d ' ' -f 1 > "$PROOF_OUTPUT/runtime-helper-sha256.txt"
+      - name: Checkout exact Android candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Pin candidate and base evidence
+        run: |
+          set -euo pipefail
+          [[ $(git rev-parse HEAD) == "$PROOF_REVISION" ]]
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$PROOF_BASE"
+          [[ $(git rev-parse "$PROOF_BASE^{commit}") == "$PROOF_BASE" ]]
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git diff --check "$PROOF_BASE" "$PROOF_REVISION"
+          printf '%s\n' "$PROOF_REVISION" > "$PROOF_OUTPUT/revision.txt"
+          printf '%s\n' "$PROOF_BASE" > "$PROOF_OUTPUT/base.txt"
+      - name: Setup pinned toolchain and frozen dependencies
+        id: setup
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          semantic-checks: "true"
+          cache-mode: off
+      - name: Record toolchain
+        run: |
+          node --version | tee "$PROOF_OUTPUT/node-version.txt"
+          pnpm --version | tee "$PROOF_OUTPUT/pnpm-version.txt"
+      - name: Format changed files
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' changed < <(git diff --name-only --diff-filter=ACMR -z "$PROOF_BASE" "$PROOF_REVISION" -- '*.ts' '*.tsx' '*.md' '*.json')
+          test "${#changed[@]}" -gt 0
+          pnpm exec oxfmt --check "${changed[@]}" 2>&1 | tee "$PROOF_OUTPUT/format.log"
+      - name: Focused source and test lint
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' changed < <(git diff --name-only --diff-filter=ACMR -z "$PROOF_BASE" "$PROOF_REVISION" -- '*.ts' '*.tsx')
+          test "${#changed[@]}" -gt 0
+          node scripts/run-oxlint.mjs "${changed[@]}" 2>&1 | tee "$PROOF_OUTPUT/lint.log"
+      - name: Focused Android authority type contracts
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const repo = process.cwd();
+          const tests = [
+            'src/agents/cron-creator-authority-context.test.ts',
+            'src/agents/agent-tools.prefix-stability.test.ts',
+            'src/gateway/cron-creator-authority-grant.test.ts',
+            'src/gateway/server-methods/agent-run-local-operator-authority.test.ts',
+            'src/gateway/server-methods/cron-creator-transports.integration.test.ts',
+            'src/gateway/server-methods/requester-cron-authority.integration.test.ts',
+            'src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts',
+            'test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts',
+          ];
+          fs.writeFileSync(path.join(process.env.PROOF_OUTPUT, 'android-types.json'), JSON.stringify({
+            extends: path.join(repo, 'test/tsconfig/tsconfig.core.test.shard.json'),
+            compilerOptions: { tsBuildInfoFile: path.join(process.env.RUNNER_TEMP, 'android-authority.tsbuildinfo') },
+            include: tests.map(file => path.join(repo, file)),
+          }, null, 2));
+          JS
+          node scripts/run-tsgo.mjs -p "$PROOF_OUTPUT/android-types.json" --pretty false 2>&1 | tee "$PROOF_OUTPUT/types.log"
+      - name: Test-line budget against exact base
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          pnpm check:test-lines-ratchet --base "$PROOF_BASE" --no-merge-base 2>&1 | tee "$PROOF_OUTPUT/test-lines.log"
+      - name: File-length budget against exact base
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          pnpm check:max-lines-ratchet --base "$PROOF_BASE" --no-merge-base 2>&1 | tee "$PROOF_OUTPUT/max-lines.log"
+      - name: Build exact candidate runtime
+        id: build
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          pnpm build:runtime 2>&1 | tee "$PROOF_OUTPUT/build.log"
+      - name: Continuation revocation and stable prompt contracts
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          node scripts/run-vitest.mjs run src/gateway/server-methods/requester-cron-authority.integration.test.ts src/agents/cron-creator-authority-context.test.ts src/agents/agent-tools.prefix-stability.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/continuation.log"
+      - name: Authenticated admission and grant boundaries
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          node scripts/run-vitest.mjs run src/gateway/cron-creator-authority-grant.test.ts src/gateway/server-methods/agent-run-local-operator-authority.test.ts src/gateway/server-methods/cron-creator-transports.integration.test.ts src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/admission.log"
+      - name: Committed Android protocol regression
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          OPENCLAW_E2E_SKIP_BUILD: "1"
+        run: |
+          node scripts/run-vitest.mjs run test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/protocol.log"
+      - name: Compiled Gateway pairing, permissions, persistence and revocation
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          node --import ./scripts/tsx.mjs "$PROOF_HELPERS/android-runtime-proof.mts" "$PROOF_OUTPUT" 2>&1 | tee "$PROOF_OUTPUT/runtime.log"
+      - name: Upload exact-revision public evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: android-authority-${{ inputs.revision }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/android-authority-evidence/revision.txt
+            ${{ runner.temp }}/android-authority-evidence/base.txt
+            ${{ runner.temp }}/android-authority-evidence/workflow-revision.txt
+            ${{ runner.temp }}/android-authority-evidence/runtime-helper-sha256.txt
+            ${{ runner.temp }}/android-authority-evidence/node-version.txt
+            ${{ runner.temp }}/android-authority-evidence/pnpm-version.txt
+            ${{ runner.temp }}/android-authority-evidence/format.log
+            ${{ runner.temp }}/android-authority-evidence/lint.log
+            ${{ runner.temp }}/android-authority-evidence/types.log
+            ${{ runner.temp }}/android-authority-evidence/test-lines.log
+            ${{ runner.temp }}/android-authority-evidence/max-lines.log
+            ${{ runner.temp }}/android-authority-evidence/build.log
+            ${{ runner.temp }}/android-authority-evidence/continuation.log
+            ${{ runner.temp }}/android-authority-evidence/admission.log
+            ${{ runner.temp }}/android-authority-evidence/protocol.log
+            ${{ runner.temp }}/android-authority-evidence/runtime.log
+            ${{ runner.temp }}/android-authority-evidence/runtime-summary.json
+          retention-days: 7
