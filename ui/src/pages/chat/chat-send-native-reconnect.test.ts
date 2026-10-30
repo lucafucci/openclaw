@@ -20,9 +20,9 @@ it.each([
   "openclaw-android",
 ] as const)("preserves the accepted reconnect envelope for %s", async (id) => {
   const browser = id === "openclaw-control-ui";
-  const client = createClient({
-    // Native challenge auth replaces these browser defaults in the real connect plan.
-    ...(browser
+  // Native challenge auth replaces these browser defaults in the real connect plan.
+  const client = createClient(
+    browser
       ? {}
       : {
           nativeConnectAuth: async ({ nonce, signedAt }) => ({
@@ -37,8 +37,8 @@ it.each([
               signedAt,
             },
           }),
-        }),
-  });
+        },
+  );
   const { ws, connectFrame } = await startConnect(client);
   expect(connectFrame.params.client.id).toBe(id);
   ws.emitMessage({
