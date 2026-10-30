@@ -1,44 +1,27 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 // Replay the existing failing assertions unchanged. Passing alone does not establish
 // a repair or rule out an earlier-file interaction in the original broad shard.
 const cases = {
-  "history-offset": {
-    file: "src/gateway/server.chat.gateway-server-chat-b.test.ts",
-    title: "chat.history backfills older offset pages across a dense silent gap",
-    config: "test/vitest/vitest.gateway.config.ts",
-    runtime: "bun",
-  },
-  "history-anchor": {
-    file: "src/gateway/server.chat.gateway-server-chat-b.test.ts",
-    title: "chat.history centers a bounded page around a message id",
-    config: "test/vitest/vitest.gateway.config.ts",
-    runtime: "bun",
-  },
-  inventory: {
-    file: "test/scripts/ci-workflow-guards.test.ts",
-    title: "keeps private Control UI servers and resource-sensitive files under one serial owner",
-    config: "test/vitest/vitest.tooling.config.ts",
-    runtime: "bun",
-  },
-  "copy-markdown": {
-    file: "ui/src/e2e/chat-message-actions.e2e.test.ts",
-    title: "keeps oversized history notices consistent through recovery and message actions",
+  "tools-loading": {
+    file: "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
+    title: "renders both Agent Tools data loads as skeletons",
     config: "test/vitest/vitest.ui-e2e.config.ts",
     runtime: "node",
   },
-  catalog: {
-    file: "ui/src/e2e/catalog-request-admission.e2e.test.ts",
-    title: "ignores unrelated session churn and reflects its own inventory changes",
+  "context-desktop": {
+    file: "ui/src/e2e/session-context-breakdown.e2e.test.ts",
+    title: "shows a scoped, non-overlapping breakdown (1440 px)",
     config: "test/vitest/vitest.ui-e2e.config.ts",
     runtime: "node",
   },
-  "session-attention": {
-    file: "ui/src/e2e/chat-run-lifecycle.e2e.test.ts",
-    title: "clears shared session activity when chat error arrives first",
+  "context-mobile": {
+    file: "ui/src/e2e/session-context-breakdown.e2e.test.ts",
+    title: "shows a scoped, non-overlapping breakdown (390 px)",
     config: "test/vitest/vitest.ui-e2e.config.ts",
     runtime: "node",
   },
@@ -57,6 +40,7 @@ assert.equal(
 );
 assert.ok(side === "base" || side === "candidate");
 assert.equal(spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim(), revision);
+const sourceSha256 = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const resultPath = (id) => path.join(output, `${id}-result.json`);
 const write = (file, data) => fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
 const [mode, id] = process.argv.slice(2);
@@ -118,6 +102,7 @@ if (mode === "run") {
     revision,
     id,
     ...selected,
+    sourceSha256: sourceSha256(selected.file),
     args,
     outcome,
     elapsedMs: Date.now() - started,
@@ -146,6 +131,9 @@ if (mode === "run") {
   const summary = {
     side,
     revision,
+    scope: "Supplemental 3 of 9 original failing cases; the initial 6 are not rerun.",
+    initialComparison: "https://github.com/lucafucci/openclaw/actions/runs/41086999798",
+    sources: Object.fromEntries(Object.values(cases).map(({ file }) => [file, sourceSha256(file)])),
     originalRun: "https://github.com/openclaw/openclaw/actions/runs/41081967801",
     limitation:
       "Focused replay excludes other files and original shard concurrency/order. A pass is not proof of a fix.",
@@ -153,9 +141,11 @@ if (mode === "run") {
   };
   write(path.join(output, "summary.json"), summary);
   const lines = [
-    `### Browser failure triage: ${side}`,
+    `### Supplemental browser failure triage: ${side}`,
     "",
     `Revision: \`${revision}\``,
+    "",
+    summary.scope,
     "",
     "| Case | Outcome |",
     "| --- | --- |",

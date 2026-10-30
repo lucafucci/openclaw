@@ -1,4 +1,4 @@
-name: Paired browser failure triage
+name: Supplemental browser failure triage
 on:
   workflow_call:
     inputs:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 jobs:
   paired:
-    name: Browser failure triage (${{ matrix.side }})
+    name: Supplemental browser failure triage (${{ matrix.side }})
     if: github.repository == 'lucafucci/openclaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -87,18 +87,11 @@ jobs:
           frozen-lockfile: "true"
           semantic-checks: "true"
           cache-mode: off
-      - name: Setup the checksum-pinned upstream Bun test runtime
-        id: bun
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        uses: ./.github/actions/setup-test-bun
       - name: Record installed toolchains
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           node --version > "$TRIAGE_OUTPUT/node-version.txt"
           pnpm --version > "$TRIAGE_OUTPUT/pnpm-version.txt"
-          if command -v bun >/dev/null; then
-            bun --revision > "$TRIAGE_OUTPUT/bun-revision.txt"
-          fi
       - name: Build the selected runtime and Control UI
         id: build
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -109,24 +102,15 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium 2>&1 | tee "$TRIAGE_OUTPUT/chromium.log"
-      - name: History offset across the silent gap
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.bun.outcome == 'success' }}
-        run: node "$TRIAGE_HELPER" run history-offset
-      - name: History page around a message anchor
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.bun.outcome == 'success' }}
-        run: node "$TRIAGE_HELPER" run history-anchor
-      - name: AST inventory of private UI servers
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bun.outcome == 'success' }}
-        run: node "$TRIAGE_HELPER" run inventory
-      - name: Copy markdown from the oversized grouped tool message
+      - name: Agent Tools loading skeletons
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
-        run: node "$TRIAGE_HELPER" run copy-markdown
-      - name: Catalog inventory admission
+        run: node "$TRIAGE_HELPER" run tools-loading
+      - name: Context breakdown at 1440 pixels
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
-        run: node "$TRIAGE_HELPER" run catalog
-      - name: Session attention after a terminal chat error
+        run: node "$TRIAGE_HELPER" run context-desktop
+      - name: Context breakdown at 390 pixels
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
-        run: node "$TRIAGE_HELPER" run session-attention
+        run: node "$TRIAGE_HELPER" run context-mobile
       - name: Summarize every selected case without converting failures to passes
         if: ${{ always() && steps.source.outcome == 'success' }}
         run: node "$TRIAGE_HELPER" summary
@@ -134,7 +118,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: browser-triage-${{ matrix.side }}-${{ matrix.revision }}-${{ github.run_attempt }}
+          name: browser-triage-supplemental-${{ matrix.side }}-${{ matrix.revision }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/browser-failure-triage-evidence/*.txt
             ${{ runner.temp }}/browser-failure-triage-evidence/*.log
