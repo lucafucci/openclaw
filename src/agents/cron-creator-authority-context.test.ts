@@ -26,6 +26,7 @@ import {
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -189,7 +190,9 @@ it.each([
       ).toBeUndefined();
       expect(
         bindCronManagementGrant(runId, {
-          tools: { gatewayPolicy: { automations: { scope: "caller" } } },
+          tools: {
+            gatewayPolicy: { allow: [AUTOMATIONS_TOOL_NAME], automations: { scope: "caller" } },
+          },
         }),
       ).toBeUndefined();
       const management = bindCronManagementGrant(runId)!;

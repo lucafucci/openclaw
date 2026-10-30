@@ -1,6 +1,7 @@
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { text as readBody } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
@@ -13,10 +14,7 @@ import { resetConfigOverrides } from "../../../../src/config/runtime-overrides.j
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../../../src/gateway/client.js";
-import {
-  readProviderBody,
-  writeToolCall,
-} from "../../../../src/gateway/gateway-provider-fixture.test-support.js";
+import { writeToolCall } from "../../../../src/gateway/gateway-provider-fixture.test-support.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -103,7 +101,7 @@ it(
       modelId: "android-authority-fixture",
       bindError: "Android authority fixture did not bind",
       async onRequest(request, response) {
-        const body = JSON.parse(await readProviderBody(request)) as { input?: ProviderInput[] };
+        const body = JSON.parse(await readBody(request)) as { input?: ProviderInput[] };
         results.push(
           ...(body.input ?? [])
             .filter((input) => input.type === "function_call_output")
