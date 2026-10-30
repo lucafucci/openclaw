@@ -108,6 +108,11 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           set -euo pipefail
+          # Keep implicit type-package resolution inside the candidate checkout.
+          mkdir -p .tmp
+          ANDROID_TYPES_CONFIG=$(mktemp "$PWD/.tmp/android-authority-types.XXXXXX.json")
+          export ANDROID_TYPES_CONFIG
+          trap 'rm -f -- "$ANDROID_TYPES_CONFIG"' EXIT
           node --input-type=module <<'JS'
           import fs from 'node:fs';
           import path from 'node:path';
@@ -122,13 +127,13 @@ jobs:
             'src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts',
             'test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts',
           ];
-          fs.writeFileSync(path.join(process.env.PROOF_OUTPUT, 'android-types.json'), JSON.stringify({
+          fs.writeFileSync(process.env.ANDROID_TYPES_CONFIG, JSON.stringify({
             extends: path.join(repo, 'test/tsconfig/tsconfig.core.test.shard.json'),
             compilerOptions: { tsBuildInfoFile: path.join(process.env.RUNNER_TEMP, 'android-authority.tsbuildinfo') },
             include: tests.map(file => path.join(repo, file)),
           }, null, 2));
           JS
-          node scripts/run-tsgo.mjs -p "$PROOF_OUTPUT/android-types.json" --pretty false 2>&1 | tee "$PROOF_OUTPUT/types.log"
+          node scripts/run-tsgo.mjs -p "$ANDROID_TYPES_CONFIG" --pretty false 2>&1 | tee "$PROOF_OUTPUT/types.log"
       - name: Test-line budget against exact base
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
@@ -154,6 +159,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           OPENCLAW_E2E_SKIP_BUILD: "1"
+          OPENCLAW_E2E_VERBOSE: "1"
         run: |
           node scripts/run-vitest.mjs run test/e2e/qa-lab/runtime/gateway-android-automation-authority.e2e.test.ts --maxWorkers=1 2>&1 | tee "$PROOF_OUTPUT/protocol.log"
       - name: Compiled Gateway pairing, permissions, persistence and revocation
