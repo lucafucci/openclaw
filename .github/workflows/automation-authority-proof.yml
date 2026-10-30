@@ -10,6 +10,7 @@ on:
         options:
           - browser
           - android
+          - browser-triage
       revision:
         description: Selected PR candidate, full 40-character commit SHA
         required: true
@@ -25,6 +26,13 @@ on:
 permissions:
   contents: read
 jobs:
+  browser-triage:
+    name: Paired browser failure triage
+    if: github.repository == 'lucafucci/openclaw' && inputs.proof_target == 'browser-triage'
+    uses: ./.github/workflows/browser-failure-triage.yml
+    with:
+      revision: ${{ inputs.revision }}
+      base: ${{ inputs.base }}
   android:
     name: Android candidate proof
     if: github.repository == 'lucafucci/openclaw' && inputs.proof_target == 'android'
@@ -34,7 +42,7 @@ jobs:
       base: ${{ inputs.base }}
   proof:
     name: Browser candidate proof
-    if: github.repository == 'lucafucci/openclaw' && inputs.proof_target != 'android'
+    if: github.repository == 'lucafucci/openclaw' && inputs.proof_target == 'browser'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:

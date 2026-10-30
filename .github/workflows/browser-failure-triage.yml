@@ -1,0 +1,144 @@
+name: Paired browser failure triage
+on:
+  workflow_call:
+    inputs:
+      revision:
+        description: Frozen synthetic merge from upstream CI
+        required: true
+        type: string
+      base:
+        description: Frozen upstream parent of that merge
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  paired:
+    name: Browser failure triage (${{ matrix.side }})
+    if: github.repository == 'lucafucci/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - side: base
+            revision: 24fa8e716fc4d8b655a21d8edd063c50f04efcfb
+          - side: candidate
+            revision: a6edbf2109ae92b1cd7a8fd936f87778322c96f0
+    defaults:
+      run:
+        shell: bash
+    env:
+      TRIAGE_SIDE: ${{ matrix.side }}
+      TRIAGE_REVISION: ${{ matrix.revision }}
+      TRIAGE_BASE: ${{ inputs.base }}
+      TRIAGE_CANDIDATE: ${{ inputs.revision }}
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+      NODE_OPTIONS: --max-old-space-size=6144
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
+    steps:
+      - name: Require the exact failed CI pair
+        run: |
+          set -euo pipefail
+          [[ "$TRIAGE_BASE" == 24fa8e716fc4d8b655a21d8edd063c50f04efcfb ]]
+          [[ "$TRIAGE_CANDIDATE" == a6edbf2109ae92b1cd7a8fd936f87778322c96f0 ]]
+      - name: Checkout workflow-owned triage helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Preserve helper and workflow identity
+        run: |
+          set -euo pipefail
+          TRIAGE_HELPER="$RUNNER_TEMP/browser-failure-triage.mjs"
+          TRIAGE_OUTPUT="$RUNNER_TEMP/browser-failure-triage-evidence"
+          mkdir -p "$TRIAGE_OUTPUT"
+          cp .github/authority-proof/browser-failure-triage.mjs "$TRIAGE_HELPER"
+          echo "TRIAGE_HELPER=$TRIAGE_HELPER" >> "$GITHUB_ENV"
+          echo "TRIAGE_OUTPUT=$TRIAGE_OUTPUT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_UI_E2E_DIAGNOSTIC_DIR=$RUNNER_TEMP/browser-failure-triage-diagnostics" >> "$GITHUB_ENV"
+          git rev-parse HEAD > "$TRIAGE_OUTPUT/workflow-revision.txt"
+          sha256sum "$TRIAGE_HELPER" | cut -d ' ' -f 1 > "$TRIAGE_OUTPUT/helper-sha256.txt"
+      - name: Checkout exact upstream revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ matrix.revision }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify selected source
+        id: source
+        run: |
+          set -euo pipefail
+          [[ $(git rev-parse HEAD) == "$TRIAGE_REVISION" ]]
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf '%s\n' "$TRIAGE_REVISION" > "$TRIAGE_OUTPUT/revision.txt"
+          printf '%s\n' "$TRIAGE_BASE" > "$TRIAGE_OUTPUT/base.txt"
+          printf '%s\n' "$TRIAGE_CANDIDATE" > "$TRIAGE_OUTPUT/candidate.txt"
+      - name: Setup pinned Node and frozen physical dependencies
+        id: setup
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          frozen-lockfile: "true"
+          semantic-checks: "true"
+          cache-mode: off
+      - name: Setup the checksum-pinned upstream Bun test runtime
+        id: bun
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        uses: ./.github/actions/setup-test-bun
+      - name: Record installed toolchains
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          node --version > "$TRIAGE_OUTPUT/node-version.txt"
+          pnpm --version > "$TRIAGE_OUTPUT/pnpm-version.txt"
+          if command -v bun >/dev/null; then
+            bun --revision > "$TRIAGE_OUTPUT/bun-revision.txt"
+          fi
+      - name: Build the selected runtime and Control UI
+        id: build
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          pnpm build:runtime 2>&1 | tee "$TRIAGE_OUTPUT/build.log"
+      - name: Prepare Chromium
+        id: chromium
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium 2>&1 | tee "$TRIAGE_OUTPUT/chromium.log"
+      - name: History offset across the silent gap
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.bun.outcome == 'success' }}
+        run: node "$TRIAGE_HELPER" run history-offset
+      - name: History page around a message anchor
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.bun.outcome == 'success' }}
+        run: node "$TRIAGE_HELPER" run history-anchor
+      - name: AST inventory of private UI servers
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bun.outcome == 'success' }}
+        run: node "$TRIAGE_HELPER" run inventory
+      - name: Copy markdown from the oversized grouped tool message
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        run: node "$TRIAGE_HELPER" run copy-markdown
+      - name: Catalog inventory admission
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        run: node "$TRIAGE_HELPER" run catalog
+      - name: Session attention after a terminal chat error
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.chromium.outcome == 'success' }}
+        run: node "$TRIAGE_HELPER" run session-attention
+      - name: Summarize every selected case without converting failures to passes
+        if: ${{ always() && steps.source.outcome == 'success' }}
+        run: node "$TRIAGE_HELPER" summary
+      - name: Upload only synthetic test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: browser-triage-${{ matrix.side }}-${{ matrix.revision }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/browser-failure-triage-evidence/*.txt
+            ${{ runner.temp }}/browser-failure-triage-evidence/*.log
+            ${{ runner.temp }}/browser-failure-triage-evidence/*-vitest.json
+            ${{ runner.temp }}/browser-failure-triage-evidence/*-result.json
+            ${{ runner.temp }}/browser-failure-triage-evidence/summary.json
+          retention-days: 7

@@ -1,0 +1,172 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+
+// Replay the existing failing assertions unchanged. Passing alone does not establish
+// a repair or rule out an earlier-file interaction in the original broad shard.
+const cases = {
+  "history-offset": {
+    file: "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+    title: "chat.history backfills older offset pages across a dense silent gap",
+    config: "test/vitest/vitest.gateway.config.ts",
+    runtime: "bun",
+  },
+  "history-anchor": {
+    file: "src/gateway/server.chat.gateway-server-chat-b.test.ts",
+    title: "chat.history centers a bounded page around a message id",
+    config: "test/vitest/vitest.gateway.config.ts",
+    runtime: "bun",
+  },
+  inventory: {
+    file: "test/scripts/ci-workflow-guards.test.ts",
+    title: "keeps private Control UI servers and resource-sensitive files under one serial owner",
+    config: "test/vitest/vitest.tooling.config.ts",
+    runtime: "bun",
+  },
+  "copy-markdown": {
+    file: "ui/src/e2e/chat-message-actions.e2e.test.ts",
+    title: "keeps oversized history notices consistent through recovery and message actions",
+    config: "test/vitest/vitest.ui-e2e.config.ts",
+    runtime: "node",
+  },
+  catalog: {
+    file: "ui/src/e2e/catalog-request-admission.e2e.test.ts",
+    title: "ignores unrelated session churn and reflects its own inventory changes",
+    config: "test/vitest/vitest.ui-e2e.config.ts",
+    runtime: "node",
+  },
+  "session-attention": {
+    file: "ui/src/e2e/chat-run-lifecycle.e2e.test.ts",
+    title: "clears shared session activity when chat error arrives first",
+    config: "test/vitest/vitest.ui-e2e.config.ts",
+    runtime: "node",
+  },
+};
+
+const output = process.env.TRIAGE_OUTPUT;
+assert.ok(output, "TRIAGE_OUTPUT is required");
+const revision = process.env.TRIAGE_REVISION;
+const side = process.env.TRIAGE_SIDE;
+assert.equal(
+  revision,
+  {
+    base: "24fa8e716fc4d8b655a21d8edd063c50f04efcfb",
+    candidate: "a6edbf2109ae92b1cd7a8fd936f87778322c96f0",
+  }[side],
+);
+assert.ok(side === "base" || side === "candidate");
+assert.equal(spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim(), revision);
+const resultPath = (id) => path.join(output, `${id}-result.json`);
+const write = (file, data) => fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+const [mode, id] = process.argv.slice(2);
+
+if (mode === "run") {
+  assert.ok(Object.hasOwn(cases, id), "Unknown triage case");
+  const selected = cases[id];
+  const report = path.join(output, `${id}-vitest.json`);
+  assert.ok(
+    !fs.existsSync(report) && !fs.existsSync(resultPath(id)),
+    "Do not overwrite an attempt",
+  );
+  const args = [
+    "scripts/run-vitest.mjs",
+    "run",
+    "--config",
+    selected.config,
+    "--configLoader",
+    "runner",
+    selected.file,
+    "--maxWorkers=1",
+    "--testNamePattern",
+    `${selected.title.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+    "--reporter=default",
+    "--reporter=json",
+    `--outputFile=${report}`,
+  ];
+  const log = fs.openSync(path.join(output, `${id}.log`), "wx");
+  console.log(`Starting ${side}/${id}: ${selected.title} (${selected.runtime})`);
+  const started = Date.now();
+  let child;
+  try {
+    child = spawnSync(process.execPath, args, {
+      env: { ...process.env, OPENCLAW_VITEST_RUNTIME: selected.runtime },
+      stdio: ["ignore", log, log],
+    });
+  } finally {
+    fs.closeSync(log);
+  }
+  let assertions = [];
+  let reportError;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(report, "utf8"));
+    assertions = parsed.testResults
+      .flatMap((suite) => suite.assertionResults)
+      .filter((test) => test.title === selected.title);
+  } catch (error) {
+    reportError = String(error);
+  }
+  const assertion = assertions.length === 1 ? assertions[0] : undefined;
+  const outcome =
+    assertion?.status === "failed"
+      ? "failed"
+      : assertion?.status === "passed" && child.status === 0
+        ? "passed"
+        : "incomplete";
+  const result = {
+    side,
+    revision,
+    id,
+    ...selected,
+    args,
+    outcome,
+    elapsedMs: Date.now() - started,
+    exitCode: child.status,
+    signal: child.signal,
+    error: child.error?.message,
+    reportError,
+    matchedAssertions: assertions.length,
+    assertions: assertions.map(({ fullName, status, failureMessages }) => ({
+      fullName,
+      status,
+      failureMessages,
+    })),
+  };
+  write(resultPath(id), result);
+  console.log(JSON.stringify(result, null, 2));
+  // Keep ordinary failures red while the workflow's later cases still run.
+  process.exitCode = outcome === "passed" ? 0 : child.status || 1;
+} else {
+  assert.equal(mode, "summary");
+  const results = Object.keys(cases).map((caseId) =>
+    fs.existsSync(resultPath(caseId))
+      ? JSON.parse(fs.readFileSync(resultPath(caseId), "utf8"))
+      : { id: caseId, outcome: "not_run" },
+  );
+  const summary = {
+    side,
+    revision,
+    originalRun: "https://github.com/openclaw/openclaw/actions/runs/41081967801",
+    limitation:
+      "Focused replay excludes other files and original shard concurrency/order. A pass is not proof of a fix.",
+    results,
+  };
+  write(path.join(output, "summary.json"), summary);
+  const lines = [
+    `### Browser failure triage: ${side}`,
+    "",
+    `Revision: \`${revision}\``,
+    "",
+    "| Case | Outcome |",
+    "| --- | --- |",
+    ...results.map((result) => `| ${result.id} | ${result.outcome} |`),
+    "",
+    summary.limitation,
+    "",
+  ];
+  console.log(lines.join("\n"));
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n"));
+  }
+  process.exitCode = results.every((result) => result.outcome === "passed") ? 0 : 1;
+}
