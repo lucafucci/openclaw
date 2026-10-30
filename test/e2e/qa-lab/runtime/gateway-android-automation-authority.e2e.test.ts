@@ -88,8 +88,11 @@ it(
       "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
     ]);
     for (const [key, value] of Object.entries(envPatch)) {
-      if (value === undefined) deleteTestEnvValue(key);
-      else setTestEnvValue(key, value);
+      if (value === undefined) {
+        deleteTestEnvValue(key);
+      } else {
+        setTestEnvValue(key, value);
+      }
     }
     const modelEntered = createDeferred();
     const modelRelease = createDeferred();
@@ -218,11 +221,12 @@ it(
           message: `${action} the existing automation`,
           idempotencyKey: `proof-${label}-${action}`,
         });
-        await admin.request(
+        const finished = await admin.request(
           "agent.wait",
           { runId: started.runId, timeoutMs: 30_000 },
           { timeoutMs: 35_000 },
         );
+        expect(finished).toMatchObject({ status: "ok" });
         expect(phaseCalls).toBeGreaterThanOrEqual(2);
         return results.join("\n");
       };
