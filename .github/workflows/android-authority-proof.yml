@@ -1,5 +1,15 @@
 name: Android automation authority proof
 on:
+  workflow_call:
+    inputs:
+      revision:
+        description: Android PR candidate, full 40-character commit SHA
+        required: true
+        type: string
+      base:
+        description: Exact integrated upstream base, full 40-character commit SHA
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       revision:

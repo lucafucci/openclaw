@@ -1,9 +1,17 @@
 name: Automation authority proof
+run-name: "${{ inputs.proof_target || 'browser' }} authority proof: ${{ inputs.revision }}"
 on:
   workflow_dispatch:
     inputs:
+      proof_target:
+        description: Candidate proof to run (browser gates run only for browser candidates)
+        type: choice
+        default: browser
+        options:
+          - browser
+          - android
       revision:
-        description: Browser PR candidate, full 40-character commit SHA
+        description: Selected PR candidate, full 40-character commit SHA
         required: true
         type: string
       base:
@@ -11,14 +19,22 @@ on:
         required: true
         type: string
       queue_fixture_repair:
-        description: Rerun changed Queue fixtures; verify other files match the previously tested candidate
+        description: Browser only - rerun changed Queue fixtures; verify other files match the previously tested candidate
         default: false
         type: boolean
 permissions:
   contents: read
 jobs:
+  android:
+    name: Android candidate proof
+    if: github.repository == 'lucafucci/openclaw' && inputs.proof_target == 'android'
+    uses: ./.github/workflows/android-authority-proof.yml
+    with:
+      revision: ${{ inputs.revision }}
+      base: ${{ inputs.base }}
   proof:
-    if: github.repository == 'lucafucci/openclaw'
+    name: Browser candidate proof
+    if: github.repository == 'lucafucci/openclaw' && inputs.proof_target != 'android'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
