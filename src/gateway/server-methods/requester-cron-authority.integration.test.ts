@@ -293,7 +293,7 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
-  it.for(["recovery", "Android requester"] as const)(
+  it.for(["scheduler notice", "Android requester"] as const)(
     "keeps %s reads scoped and withholds a record when authority closes during its read",
     async (source, { signal }) => {
       const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
@@ -322,7 +322,7 @@ describe("requester continuation persisted automation management", () => {
             },
           },
         );
-      const own = await addOwnedJob(SESSION, "Recovery-visible record");
+      const own = await addOwnedJob(SESSION, "Owned automation record");
       const foreign = await addOwnedJob(
         "agent:main:another-conversation",
         "Private foreign record",
@@ -355,7 +355,7 @@ describe("requester continuation persisted automation management", () => {
         const readSpy = vi.spyOn(cron, "readJob").mockImplementation(async (id) => {
           const recorded = await readJob(id);
           if (holdRead) {
-            expect(recorded?.id).toBe(source === "recovery" ? own.id : foreign.id);
+            expect(recorded?.id).toBe(source === "scheduler notice" ? own.id : foreign.id);
             entered.resolve();
             await withinTest(release.promise, signal);
           }
@@ -368,8 +368,13 @@ describe("requester continuation persisted automation management", () => {
             config,
             admitted,
             creator,
-            senderIsOwner: source !== "recovery",
-            forceRestartSafeTools: source === "recovery",
+            senderIsOwner: source !== "scheduler notice",
+            ...(source === "scheduler notice"
+              ? {
+                  trigger: "event",
+                  inputProvenance: { kind: "internal_system", sourceTool: "cron" } as const,
+                }
+              : {}),
           });
           const inspect = (jobId: string) =>
             tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId });
@@ -381,7 +386,7 @@ describe("requester continuation persisted automation management", () => {
             expect.objectContaining({ id: own.id, name: own.name }),
             undefined,
           );
-          if (source === "recovery") {
+          if (source === "scheduler notice") {
             await expect(inspect(foreign.id)).rejects.toThrow("cron job not found");
             expect(responses).toHaveBeenLastCalledWith(false, undefined, expect.anything());
           } else {
@@ -392,7 +397,7 @@ describe("requester continuation persisted automation management", () => {
           responses.mockClear();
 
           holdRead = true;
-          pending = inspect(source === "recovery" ? own.id : foreign.id);
+          pending = inspect(source === "scheduler notice" ? own.id : foreign.id);
           await withinTest(
             awaitGateBeforeSettlement(
               entered.promise,
@@ -401,7 +406,7 @@ describe("requester continuation persisted automation management", () => {
             ),
             signal,
           );
-          if (source === "recovery") {
+          if (source === "scheduler notice") {
             expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
           } else {
             invalidateGatewayDeviceRevocation(
@@ -412,7 +417,7 @@ describe("requester continuation persisted automation management", () => {
           }
           release.resolve();
           const rejection =
-            source === "recovery"
+            source === "scheduler notice"
               ? /authority|admitted run/i
               : /Automation caller authority is no longer active/;
           await expect(pending).rejects.toThrow(rejection);
@@ -422,7 +427,7 @@ describe("requester continuation persisted automation management", () => {
             expect.objectContaining({
               code: "INVALID_REQUEST",
               message: expect.stringMatching(
-                source === "recovery"
+                source === "scheduler notice"
                   ? rejection
                   : /invalid cron.get params: Automation admin grant is missing, expired, or already used/,
               ),
@@ -436,8 +441,8 @@ describe("requester continuation persisted automation management", () => {
         }
       };
       try {
-        if (source === "recovery") {
-          await inRun("recovery-inspection", undefined, exercise);
+        if (source === "scheduler notice") {
+          await inRun("automation-inspection", undefined, exercise);
         } else {
           await withSuccessor("android-admin", exercise, caller);
         }
@@ -497,7 +502,7 @@ describe("requester continuation persisted automation management", () => {
             delivery: { mode: "none" },
           },
         }),
-      ).rejects.toThrow("This turn can only list, get, update, run, or remove automations");
+      ).rejects.toThrow("This turn can only list, get, update, run, remove, or bind automations");
       expect(await fixture.read()).toEqual([]);
     });
   });
